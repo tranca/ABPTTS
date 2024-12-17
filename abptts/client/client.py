@@ -65,13 +65,13 @@ class StartClient(threading.Thread):
 		self.socket_timeout_current = self.abptts_config.get_float("Network.client", "clientSocketTimeoutBase")
 		self.client_block_size_limit_from_server = self.abptts_config.get_int("Network.client", "clientBlockSizeLimitFromServer")
 		self.header_value_key = self.abptts_config.get_string("Authentication", "headerValueKey")
-		self.access_key_mode =  self.abptts_config.get_string("Encryption", "accessKeyMode")		
+		self.access_key_mode =  self.abptts_config.get_string("Encryption", "accessKeyMode")
 		self.param_name_access_key = self.abptts_config.get_string("Obfuscation", "paramNameAccessKey")
 		self.param_name_encrypted_block = self.abptts_config.get_string("Obfuscation", "paramNameEncryptedBlock")
 		self.param_name_plaintext_block = self.abptts_config.get_string("Obfuscation", "paramNamePlaintextBlock")
 		self.echo_HTTP_body = self.abptts_config.get_boolean("Logging", "echoHTTPBody")
 		self.echo_data = self.abptts_config.get_boolean("Logging", "echoData")
-		self.echo_debug_messages = self.abptts_config.get_boolean("Logging", "echoDebugMessages")		
+		self.echo_debug_messages = self.abptts_config.get_boolean("Logging", "echoDebugMessages")
 		self.session = self.init_session(unsafe_tls)
 
 	def init_session(self, unsafe_tls):
@@ -108,7 +108,7 @@ class StartClient(threading.Thread):
 		rivPlaintext = unpad(rivPlaintext, AES.block_size)
 		return rivPlaintext[AES.block_size:]
 
-	def get_clean_server_response(self, response):			
+	def get_clean_server_response(self, response):
 		result = response
 		wrapper_text = []
 		wrapper_prefix = b64decode(self.abptts_config.get_string("Obfuscation", "responseStringPrefixB64")).decode()
@@ -131,19 +131,19 @@ class StartClient(threading.Thread):
 		server_address = f"{self.listener_config["remote"]["host"]}:{self.listener_config["remote"]["port"]}"
 		client_address = f"{self.addr[0]}:{self.addr[1]}"
 		listening_address = f"{self.listener_config["remote"]["host"]}:{self.listener_config["remote"]["port"]}"
-		result = f"[({direction}) "		
+		result = f"[({direction}) "
 
 		if direction == "S2C":
 			result += f"{server_address} -> {listening_address} -> {client_address}"
 		else:
 			result += f"{client_address} -> {listening_address} -> {server_address}"
-			
+
 		if self.connection_id:
 			result += f" (Connection ID: {self.connection_id})"
 
 		if category:
 			result += f" ({category})"
-				
+
 		result += f"]: {message}"
 
 		logger.info(result)
@@ -153,11 +153,11 @@ class StartClient(threading.Thread):
 			try:
 				self.encryption_key = bytes.fromhex(self.abptts_config.get_string("Encryption", "encryptionKeyHex"))
 				if self.encryption_key and self.abptts_config.get_string("Encryption", "accessKeyMode") == "header":
-					self.session.headers.update({ self.abptts_config.get_string("Authentication", "headerNameKey"): self.header_value_key })		
+					self.session.headers.update({ self.abptts_config.get_string("Authentication", "headerNameKey"): self.header_value_key })
 			except Exception as e:
 				logger.exception("Could not cast encryption key to array of bytes")
 				sys.exit(1)
-		else:		
+		else:
 			logger.warning("The current configuration DOES NOT ENCRYPT tunneled traffic. If you wish to use symmetric encryption, restart this utility with a configuration file which defines a valid encryption key.")
 
 	def create_message(self, operation, params):
@@ -166,7 +166,7 @@ class StartClient(threading.Thread):
 			b64decode(self.abptts_config.get_string("Obfuscation", "dataBlockNameValueSeparatorB64")).decode(),
 			b64decode(self.abptts_config.get_string("Obfuscation", "dataBlockParamSeparatorB64")).decode()
 		]
-		
+
 		plaintext_message += self.abptts_config.get_string("Obfuscation", "paramNameOperation") + separators[0]
 		plaintext_message += operation + separators[1]
 		for param, sep_idx in params[:-1]:
@@ -174,7 +174,7 @@ class StartClient(threading.Thread):
 		plaintext_message += params[-1]
 
 		return plaintext_message
-			
+
 	def create_open_connection_message(self):
 		operation = self.abptts_config.get_string("Obfuscation", "opModeStringOpenConnection")
 		params = [
@@ -182,7 +182,7 @@ class StartClient(threading.Thread):
 			(self.listener_config["remote"]["host"], 1),
 			(self.abptts_config.get_string("Obfuscation", "paramNameDestinationPort"), 0),
 			str(self.listener_config["remote"]["port"])
-		]		
+		]
 		return self.create_message(operation, params)
 
 	def create_close_connection_message(self):
@@ -190,7 +190,7 @@ class StartClient(threading.Thread):
 		params = [
 			(self.abptts_config.get_string("Obfuscation", "paramNameConnectionID"), 0),
 			self.connection_id
-		]		
+		]
 		return self.create_message(operation, params)
 
 	def create_send_receive_message(self, data):
@@ -200,7 +200,7 @@ class StartClient(threading.Thread):
 			(self.connection_id, 1),
 			(self.abptts_config.get_string("Obfuscation", "paramNameData"), 0),
 			data
-		]		
+		]
 		return self.create_message(operation, params)
 
 	def read_socket(self):
@@ -219,7 +219,7 @@ class StartClient(threading.Thread):
 			self.c2s_buffer = b""
 
 		c2s_b64encoded_data = b64encode(c2s_bytes).decode()
-		
+
 		if self.echo_debug_messages:
 			self.output_tunnel_IO_message("C2S", f"Sending {len(c2s_bytes)} bytes")
 		if self.echo_data:
@@ -236,7 +236,7 @@ class StartClient(threading.Thread):
 		if self.encryption_key:
 			encrypted_message = b64encode(self.encrypt(message)).decode()
 			if self.abptts_config.get_boolean("Logging", "echoData"):
-				self.output_tunnel_IO_message("C2S", encrypted_message, "Raw Data (Encrypted) (base64)")						
+				self.output_tunnel_IO_message("C2S", encrypted_message, "Raw Data (Encrypted) (base64)")
 			body = { self.param_name_encrypted_block: encrypted_message }
 			if self.access_key_mode != "header":
 				body[self.param_name_access_key] = self.header_value_key
@@ -245,7 +245,7 @@ class StartClient(threading.Thread):
 			body = { self.param_name_plaintext_block: message }
 			if self.access_key_mode != "header":
 				body[self.param_name_access_key] = self.header_value_key
-				
+
 		if self.echo_HTTP_body:
 			self.output_tunnel_IO_message("C2S", body, "HTTP Request Body")
 
@@ -256,7 +256,7 @@ class StartClient(threading.Thread):
 			success = True
 		except Exception as e:
 			logger.exception("C2S", f"HTTP request failed with the following message -> {e}")
-		
+
 		return clean_response, response, success
 
 	def send_data_to_socket(self, body_array):
@@ -272,13 +272,13 @@ class StartClient(threading.Thread):
 
 			if self.encryption_key:
 				s2c_bytes = self.decrypt(s2c_bytes)
-			
+
 			s2c_bytes_len = len(s2c_bytes)
 			number_of_blocks = int(math.ceil(float(s2c_bytes_len) / float(self.client_block_size_limit_from_server)))
 
 			if self.echo_debug_messages and number_of_blocks > 1:
 				self.output_tunnel_IO_message("S2C", f"Splitting large block ({s2c_bytes_len} bytes) into {number_of_blocks} blocks for relay to client")
-			
+
 			for block_index in range(number_of_blocks):
 				first_byte = block_index * self.client_block_size_limit_from_server
 				last_byte = (block_index + 1) * self.client_block_size_limit_from_server
@@ -304,10 +304,10 @@ class StartClient(threading.Thread):
 				if delay > 0.0:
 					if block_index < (number_of_blocks - 1):
 						time.sleep(delay)
-		
+
 		return bytes_sent
 
-	def update_iterations(self):		
+	def update_iterations(self):
 		self.iterations_counter += 1
 
 		if self.iterations_counter > self.abptts_config.get_int("Logging", "statsUpdateIterations"):
@@ -345,7 +345,7 @@ class StartClient(threading.Thread):
 			if not found_response_type:
 				self.output_tunnel_IO_message("S2C", f"Unexpected response from server: {body}")
 				self.client_closed_connection = True
-					
+
 	def update_socket_timeout(self, scale_socket_timeout_down, scale_socket_timeout_up):
 		client_socket_timeout_min = self.abptts_config.get_float("Network.client", "clientSocketTimeoutMin")
 		client_socket_timeout_max = self.abptts_config.get_float("Network.client", "clientSocketTimeoutMax")
@@ -368,7 +368,7 @@ class StartClient(threading.Thread):
 			if self.echo_debug_messages:
 				logger.info(f"[Connection ID {self.connection_id}]: Client-side socket timeout has been changed from {self.socket_timeout_current} to {new_socket_timeout}")
 			self.socket_timeout_current = new_socket_timeout
-			
+
 		# apply random socket timeout variation
 		client_socket_timeout_variation = self.abptts_config.get_float("Network.client", "clientSocketTimeoutVariation")
 		client_socket_timeout_variation_neg = client_socket_timeout_variation * -1.0
@@ -377,10 +377,10 @@ class StartClient(threading.Thread):
 		effective_timeout = self.socket_timeout_current + timeout_modifier
 		if self.echo_debug_messages:
 			logger.info(f"[Connection ID {self.connection_id}]: Applying random variation of {timeout_modifier} to client-side socket timeout for this iteration - timeout will be {effective_timeout}")
-			
+
 		self.socket.settimeout(effective_timeout)
 
-	def start_connection(self):		
+	def start_connection(self):
 		clean_response, raw_response, success = self.send_message(self.create_open_connection_message())
 
 		if success:
@@ -406,7 +406,7 @@ class StartClient(threading.Thread):
 			self.bytes_read = 0
 			self.bytes_sent = 0
 			self.iterations_counter = 0
-			
+
 			try:
 				data = self.socket.recv(self.abptts_config.get_int("Network.client", "clientSocketBufferSize"))
 				if data:
@@ -431,12 +431,12 @@ class StartClient(threading.Thread):
 			else:
 				break
 
-			body_array = clean_response.split(" ", 1)				
+			body_array = clean_response.split(" ", 1)
 			if len(body_array) > 1:
 				self.bytes_sent += self.send_data_to_socket(body_array)
 			else:
 				self.parse_server_error(clean_response)
-			
+
 			if self.abptts_config.get_string("Obfuscation", "responseStringConnectionClosed") in clean_response:
 				self.output_tunnel_IO_message("S2C", f"The server explicitly closed connection ID {self.connection_id}")
 				self.client_closed_connection = True
@@ -465,7 +465,7 @@ class StartClient(threading.Thread):
 				if self.abptts_config.get_boolean("Network.client", "autoscaleClientSocketTimeout"):
 					self.update_socket_timeout(scale_socket_timeout_down, scale_socket_timeout_up)
 
-		if self.client_closed_connection:			
+		if self.client_closed_connection:
 			server_address = f"{self.listener_config["remote"]["host"]}:{self.listener_config["remote"]["port"]}"
 			client_address = f"{self.addr[0]}:{self.addr[1]}"
 			listening_address = f"{self.listener_config["remote"]["host"]}:{self.listener_config["remote"]["port"]}"
@@ -514,7 +514,7 @@ class StartListener(threading.Thread):
 			server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 			server.bind((self.local["host"], self.local["port"]))
 			server.listen()
-		except Exception as e:			
+		except Exception as e:
 			logger.exception(f"Could not start listener on {self.local["host"]}:{self.local["port"]}{os.linesep}{e}")
 
 		logger.info(f"Listener ready to forward connections from {self.local["host"]}:{self.local["port"]} to {self.remote["host"]}:{self.remote["port"]} via {self.forwarding_url}")
@@ -527,7 +527,7 @@ class StartListener(threading.Thread):
 				for s in readable:
 					client, addr = s.accept()
 					logger.info(f"Client connected to {self.local["host"]}:{self.local["port"]}")
-					formattedAddress = f"{self.local["host"]}:{self.local["port"]}"			
+					formattedAddress = f"{self.local["host"]}:{self.local["port"]}"
 					client = StartClient(client, addr, self.listener_config, self.abptts_config, self.unsafe_tls)
 					client.start()
 					self.queue.append(client)
@@ -542,10 +542,10 @@ class StartListener(threading.Thread):
 
 if __name__=='__main__':
 	ABPTTSVersion.showBanner()
-	
+
 	basePath = pathlib.Path(__file__).parent.resolve()
 
-	parser = ArgumentParser(prog='ABPTTS', 
+	parser = ArgumentParser(prog='ABPTTS',
     	formatter_class=ArgumentDefaultsHelpFormatter,
 		usage='Usage: %(prog)s -c CONFIG_FILE_1 -c CONFIG_FILE_2 [...] -c CONFIG_FILE_n -u FORWARDINGURL -f LOCALHOST1:LOCALPORT1/TARGETHOST1:TARGETPORT1 -f LOCALHOST2:LOCALPORT2/TARGETHOST2:TARGETPORT2 [...] -f LOCALHOSTn:LOCALPORTn/TARGETHOSTn:TARGETPORTn [--debug]',
 		epilog='Example: %(prog)s -c CONFIG_FILE_1 -u https://vulnerableserver/EStatus/ -f 127.0.0.1:28443/10.10.20.11:8443 \
@@ -559,7 +559,7 @@ if __name__=='__main__':
 	parser.add_argument('--unsafe-tls', help='will disable TLS/SSL certificate validation when connecting to the server, if the connection is over HTTPS', action='store_true')
 	parser.add_argument('--debug', help='enables verbose output.', action='store_true')
 
-	args = parser.parse_args()		
+	args = parser.parse_args()
 
 	if args.unsafe_tls:
 		logger.warning("The current configuration ignores TLS/SSL certificate validation errors for connection to the server component.\nThis increases the risk of the communication channel being intercepted or tampered with.")
@@ -572,7 +572,7 @@ if __name__=='__main__':
 
 	if args.debug:
 		abptts_config.ShowParameters()
-	
+
 	queue = []
 
 	for forwarding_config in args.forwarding_configs:
@@ -585,7 +585,7 @@ if __name__=='__main__':
 		except:
 			logger.exception(f"Error while parsing the following forwarding config {forwarding_config}")
 			sys.exit(1)
-		
+
 		listener_config = {
 			"forwarding_url": args.forwarding_url,
 			"local": { "host": ip_local, "port": port_local },
