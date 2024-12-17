@@ -1,1 +1,2 @@
-accessKeyMode:::::::postparam
+[Encryption]
+accessKeyMode = postparam

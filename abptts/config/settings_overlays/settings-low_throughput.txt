@@ -1,1 +1,2 @@
-clientBlockSizeLimitFromServer:::::::8192
+[Network.client]
+clientBlockSizeLimitFromServer = 8192
