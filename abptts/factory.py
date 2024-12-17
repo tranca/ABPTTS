@@ -132,9 +132,7 @@ def create_war(conf, template_path, output_dir, jsp_server_filename):
 	war_dst_dir = os.path.abspath(os.path.join(output_dir, war_relative_path))
 	war_web_inf_dst = os.path.join(war_dst_dir, 'WEB-INF')
 	war_meta_inf_dst = os.path.join(war_dst_dir, 'META-INF')
-	success, filename = conf.get_key("Output", "fileGenerationAppNameShort")
-	if not success:
-		sys.exit(1)
+	filename = conf.get_key("Output", "fileGenerationAppNameShort")
 
 	war_jsp_dst = os.path.join(war_dst_dir, f"{filename}.jsp")
 	war_dst_file = os.path.join(output_dir, f"{filename}.war")

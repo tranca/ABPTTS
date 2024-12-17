@@ -24,7 +24,7 @@ import configparser
 
 from utils.utils import Utils
 
-logging.basicConfig(level=logging.DEBUG, format='[%(asctime)s][%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s][%(levelname)s] %(message)s')
 
 class Config:
 	logger = logging.getLogger(__name__)
@@ -83,7 +83,10 @@ class Config:
 				self.logger.critical(f"Unknown value type '{value_type}'")
 				success = False
 
-		return success, value
+		if not success:
+			sys.exit(1)
+
+		return value
 
 
 	def replace_if_placeholder(self, key, value):
