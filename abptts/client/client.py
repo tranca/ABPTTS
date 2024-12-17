@@ -19,22 +19,16 @@
 
 # Client component of A Black Path Toward The Sun
 
-from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter,  RawDescriptionHelpFormatter
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from base64 import b64encode, b64decode
-import pathlib
+import threading
 import logging
+import socket
+import random
 import math
 import os
-import random
-import re
 import sys
-
-import threading
-import select
-import socket
-
 import requests
 from requests.adapters import HTTPAdapter, Retry
 import time
