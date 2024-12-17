@@ -34,36 +34,45 @@ from utils.utils import Utils
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s][%(levelname)s] %(message)s')
 
-def set_values(conf, wordlist_lines, user_agents_lines, auth_key_size, encryption_key_size):
-	separators = [ '', '.', '_', '-', '@', '#', '$', '&', '|', '/' ]
-	random_values = []
-	random_values_with_sep = []
-	all_candidates = []
+def set_wrappers(conf, template_file):
+	template_placeholder = "|ABPTTS_RESPONSE_CONTENT|"
+	wrapper_prefix = ""
+	wrapper_suffix = ""
 
-	while len(random_values) < 12:
-		candidate = ''.join(random.SystemRandom().choice(wordlist_lines) for _ in range(2))
-		if candidate not in all_candidates:
-			random_values.append(candidate)
+	if os.path.exists(template_file):
+		success, template_content = Utils.read_file(template_file)
+		if not success:
+			sys.exit(1)
 
-	while len(random_values_with_sep) < 15:
-		first = os.urandom(random.randint(1, 36)).hex()
-		second = os.urandom(random.randint(1, 36)).hex()
-		candidate = f"{first}{Utils.get_random_entry(separators)}{second}"
-		if candidate not in all_candidates:
-			random_values_with_sep.append(candidate)
-			all_candidates.append(candidate)
+		template_lines = template_content.split(template_placeholder)
 
-	conf.replace_if_placeholder('headerValueUserAgent', Utils.get_random_entry(user_agents_lines))
-	conf.replace_if_placeholder('headerNameKey', f"X-{Utils.get_random_entries(wordlist_lines, 3, '-')}")
-	conf.replace_if_placeholder('headerValueKey', b64encode(os.urandom(auth_key_size)).decode())
-	conf.replace_if_placeholder('encryptionKeyHex', os.urandom(encryption_key_size).hex())
+		if len(template_lines) > 1:
+			wrapper_prefix = template_lines[0]
+			wrapper_suffix = template_lines[1]
+		else:
+			logger.fatal(f"Could not get wrapper prefix and suffix.")
+			sys.exit(1)
+	else:
+		logger.fatal(f"File '{template_file}' doesn't exist.")
+		sys.exit(1)
 
+	if wrapper_prefix:
+		success = conf.update_value("Obfuscation", "responseStringPrefixB64", b64encode(wrapper_prefix.encode()).decode())
+		if not success:
+			sys.exit(1)
+
+	if wrapper_suffix:
+		success = conf.update_value("Obfuscation", "responseStringSuffixB64", b64encode(wrapper_suffix.encode()).decode())
+		if not success:
+			sys.exit(1)
+
+def set_random_values(conf, values):
 	params = [
 		"paramNameOperation", "paramNameDestinationHost", "paramNameDestinationPort", "paramNameConnectionID", "paramNameData", "paramNamePlaintextBlock", "paramNameEncryptedBlock",
 		"opModeStringOpenConnection", "opModeStringSendReceive", "opModeStringCloseConnection", "fileGenerationAppNameShort", "paramNameAccessKey"
 	]
 
-	for p, v in zip(params, random_values):
+	for p, v in zip(params, values["random_values"]):
 		conf.replace_if_placeholder(p, v)
 
 	params_with_sep = [
@@ -73,21 +82,44 @@ def set_values(conf, wordlist_lines, user_agents_lines, auth_key_size, encryptio
 		"responseStringErrorEncryptionNotSupported"
 	]
 
-	for p, v in zip(params_with_sep, random_values_with_sep):
+	for p, v in zip(params_with_sep, values["random_values_with_sep"]):
 		conf.replace_if_placeholder(p, v)
+
+	conf.replace_if_placeholder('dataBlockNameValueSeparatorB64', b64encode(values["name_value_sep"].encode()).decode())
+	conf.replace_if_placeholder('dataBlockParamSeparatorB64', b64encode(values["param_sep"].encode()).decode())
+
+def gen_random_values(conf, wordlist_lines):
+	separators = [ '', '.', '_', '-', '@', '#', '$', '&', '|', '/' ]
+	results = {}
+	results["random_values"] = []
+	results["random_values_with_sep"] = []
+	all_candidates = []
+
+	while len(results["random_values"]) < 12:
+		candidate = ''.join(random.SystemRandom().choice(wordlist_lines) for _ in range(2))
+		if candidate not in all_candidates:
+			results["random_values"].append(candidate)
+
+	
+	while len(results["random_values_with_sep"]) < 15:
+		first = os.urandom(random.randint(1, 36)).hex()
+		second = os.urandom(random.randint(1, 36)).hex()
+		candidate = f"{first}{Utils.get_random_entry(separators)}{second}"
+		if candidate not in all_candidates:
+			results["random_values_with_sep"].append(candidate)
+			all_candidates.append(candidate)
 
 	# use entire ASCII non-printable range except for null bytes
 	block_sep_chars = [chr(i) for i in range(1, 32)]
 
 	bscl = len(block_sep_chars) - 1
-	name_value_sep = block_sep_chars[random.randint(0, bscl)]
-	param_sep = block_sep_chars[random.randint(0, bscl)]
+	results["name_value_sep"] = block_sep_chars[random.randint(0, bscl)]
+	results["param_sep"] = block_sep_chars[random.randint(0, bscl)]
 
-	while name_value_sep == param_sep:
-		param_sep = block_sep_chars[random.randint(0, bscl)]
+	while results["name_value_sep"] == results["param_sep"]:
+		results["param_sep"] = block_sep_chars[random.randint(0, bscl)]
 
-	conf.replace_if_placeholder('dataBlockNameValueSeparatorB64', b64encode(name_value_sep.encode()).decode())
-	conf.replace_if_placeholder('dataBlockParamSeparatorB64', b64encode(param_sep.encode()).decode())
+	return results
 
 def create_war(conf, template_path, output_dir, jsp_server_filename):
 	war_relative_path = "war"
@@ -158,8 +190,7 @@ if __name__=='__main__':
 	args = parser.parse_args()
 
 	jsp_server_filename = 'abptts.jsp'
-	aspx_server_filename = 'abptts.aspx'	
-	template_placeholder = "|ABPTTS_RESPONSE_CONTENT|"
+	aspx_server_filename = 'abptts.aspx'
 
 	template_files = []
 	template_files.append(jsp_server_filename)
@@ -231,37 +262,13 @@ if __name__=='__main__':
 		logger.critical(f"No content obtained from user-agent list file {ua_path}")
 		sys.exit(1)
 
-	wrapper_prefix = ""
-	wrapper_suffix = ""
-
-	if os.path.exists(args.template_file):
-		success, template_content = Utils.read_file(args.template_file)
-		if not success:
-			sys.exit(1)
-
-		template_lines = template_content.split(template_placeholder)
-
-		if len(template_lines) > 1:
-			wrapper_prefix = template_lines[0]
-			wrapper_suffix = template_lines[1]
-		else:
-			logger.fatal(f"Could not get wrapper prefix and suffix.")
-			sys.exit(1)
-	else:
-		logger.fatal(f"File '{args.template_file}' doesn't exist.")
-		sys.exit(1)
-
-	if wrapper_prefix:
-		success = conf.update_value("Obfuscation", "responseStringPrefixB64", b64encode(wrapper_prefix.encode()).decode())
-		if not success:
-			sys.exit(1)
-
-	if wrapper_suffix:
-		success = conf.update_value("Obfuscation", "responseStringSuffixB64", b64encode(wrapper_suffix.encode()).decode())
-		if not success:
-			sys.exit(1)
-
-	set_values(conf, wordlist_lines, user_agents_lines, auth_key_size, encryption_key_size)
+	set_wrappers(conf, args.template_file)
+	set_random_values(conf, gen_random_values(conf, wordlist_lines))
+	
+	conf.replace_if_placeholder('headerValueUserAgent', Utils.get_random_entry(user_agents_lines))
+	conf.replace_if_placeholder('headerNameKey', f"X-{Utils.get_random_entries(wordlist_lines, 3, '-')}")
+	conf.replace_if_placeholder('headerValueKey', b64encode(os.urandom(auth_key_size)).decode())
+	conf.replace_if_placeholder('encryptionKeyHex', os.urandom(encryption_key_size).hex())
 
 	if args.debug:
 		logger.debug("Building ABPTTS configuration with the following values:")
