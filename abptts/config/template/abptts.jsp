@@ -98,7 +98,7 @@ public byte[] GenerateRandomBytes(int byteCount)
 
 public byte[] EncryptData(byte[] plaintext, Cipher cipher, byte[] key) throws InvalidKeyException, InvalidAlgorithmParameterException, IllegalBlockSizeException, BadPaddingException
 {
-	byte[] nonce = new byte[16];
+	byte[] nonce = new byte[12];
 	SecureRandom secureRandom = new SecureRandom();
 	secureRandom.nextBytes(nonce);
 	GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(128, nonce);
@@ -109,9 +109,9 @@ public byte[] EncryptData(byte[] plaintext, Cipher cipher, byte[] key) throws In
 	byte[] ciphertext = cipher.doFinal(plaintext);
 
 	// We need to sent nonce + data
-	byte[] data = new byte[ciphertext.length + (128 / Byte.SIZE)];
-	System.arraycopy(nonce, 0, data, 0, (128 / Byte.SIZE));
-	System.arraycopy(ciphertext, 0, data, (128 / Byte.SIZE), ciphertext.length);
+	byte[] data = new byte[ciphertext.length + (96 / Byte.SIZE)];
+	System.arraycopy(nonce, 0, data, 0, (96 / Byte.SIZE));
+	System.arraycopy(ciphertext, 0, data, (96 / Byte.SIZE), ciphertext.length);
 
 	return data;
 }
@@ -119,12 +119,12 @@ public byte[] EncryptData(byte[] plaintext, Cipher cipher, byte[] key) throws In
 public byte[] DecryptData(byte[] ciphertext, Cipher cipher, byte[] key) throws InvalidKeyException, InvalidAlgorithmParameterException, IllegalBlockSizeException, BadPaddingException
 {
 	// We need to extract the nonce from data
-	byte[] nonce = new byte[16];
-	System.arraycopy(ciphertext, 0, nonce, 0, (128 / Byte.SIZE));
+	byte[] nonce = new byte[12];
+	System.arraycopy(ciphertext, 0, nonce, 0, (96 / Byte.SIZE));
 	GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(128, nonce);
 
-	byte[] data = new byte[ciphertext.length - (128 / Byte.SIZE)];
-	System.arraycopy(ciphertext, (128 / Byte.SIZE), data, 0, ciphertext.length - (128 / Byte.SIZE));
+	byte[] data = new byte[ciphertext.length - (96 / Byte.SIZE)];
+	System.arraycopy(ciphertext, (96 / Byte.SIZE), data, 0, ciphertext.length - (96 / Byte.SIZE));
 
 	SecretKey secretKey = new SecretKeySpec(key, 0, key.length, "AES");
 	cipher.init(Cipher.DECRYPT_MODE, secretKey, gcmParameterSpec);

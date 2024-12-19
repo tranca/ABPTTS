@@ -20,6 +20,7 @@
 # Client component of A Black Path Toward The Sun
 
 from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
 from Crypto.Util.Padding import pad, unpad
 from base64 import b64encode, b64decode
 import threading
@@ -127,13 +128,14 @@ class Client(threading.Thread):
 		return s
 
 	def encrypt(self, data):
-		cipher = AES.new(self.encryption_key, AES.MODE_GCM)
+		nonce = get_random_bytes(12)
+		cipher = AES.new(self.encryption_key, AES.MODE_GCM, nonce=nonce)
 		ciphertext, tag = cipher.encrypt_and_digest(data.encode())
-		return cipher.nonce + ciphertext + tag
+		return nonce + ciphertext + tag
 
 	def decrypt(self, ciphertext):
-		nonce = ciphertext[0:AES.block_size]
-		data = ciphertext[AES.block_size:-AES.block_size]
+		nonce = ciphertext[0:12]
+		data = ciphertext[12:-AES.block_size]
 		tag = ciphertext[-AES.block_size:]
 
 		cipher = AES.new(self.encryption_key, AES.MODE_GCM, nonce=nonce)
