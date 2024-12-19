@@ -126,20 +126,22 @@ class Client(threading.Thread):
 
 		return s
 
-	def encrypt(self, plaintext):
-		iv = bytearray(os.urandom(AES.block_size))
-		reIV = bytearray(os.urandom(AES.block_size))
-		rivPlaintext = pad(reIV + bytearray(plaintext.encode()), AES.block_size)
-		cipher = AES.new(self.encryption_key, AES.MODE_CBC, IV=iv)
-		return iv + cipher.encrypt(rivPlaintext)
+	def encrypt(self, data):
+		cipher = AES.new(self.encryption_key, AES.MODE_GCM)
+		ciphertext, tag = cipher.encrypt_and_digest(data.encode())
+		return cipher.nonce + ciphertext + tag
 
 	def decrypt(self, ciphertext):
-		iv = ciphertext[0:AES.block_size]
-		rivCiphertext = ciphertext[AES.block_size:]
-		cipher = AES.new(self.encryption_key, AES.MODE_CBC, IV=iv)
-		rivPlaintext = cipher.decrypt(rivCiphertext)
-		rivPlaintext = unpad(rivPlaintext, AES.block_size)
-		return rivPlaintext[AES.block_size:]
+		nonce = ciphertext[0:AES.block_size]
+		data = ciphertext[AES.block_size:-AES.block_size]
+		tag = ciphertext[-AES.block_size:]
+
+		cipher = AES.new(self.encryption_key, AES.MODE_GCM, nonce=nonce)
+		try:
+			plaintext = cipher.decrypt_and_verify(data, tag)
+			return plaintext
+		except ValueError:
+			self.logger.exception("Message decryption failed. Key incorrect or message corrupted")
 
 	def get_clean_server_response(self, response):
 		result = response
@@ -268,10 +270,11 @@ class Client(threading.Thread):
 		success = False
 
 		if self.encryption_key:
-			encrypted_message = b64encode(self.encrypt(message)).decode()
+			encrypted_data = self.encrypt(message)
+			b64_encrypted_data = b64encode(encrypted_data).decode()
 			if self.echo_data:
-				self.output_tunnel_IO_message("C2S", encrypted_message, "Raw Data (Encrypted) (base64)")
-			body = { self.param_name_encrypted_block: encrypted_message }
+				self.output_tunnel_IO_message("C2S", b64_encrypted_data, "Raw Data (Encrypted) (base64)")
+			body = { self.param_name_encrypted_block: b64_encrypted_data }
 			if self.access_key_mode != "header":
 				body[self.param_name_access_key] = self.header_value_key
 		else:

